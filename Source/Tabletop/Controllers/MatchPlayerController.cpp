@@ -191,6 +191,12 @@ void AMatchPlayerController::Server_StartBattle_Implementation()
 		GM->HandleStartBattle(this);
 }
 
+void AMatchPlayerController::Server_EndPhase_Implementation()
+{
+	if (AMatchGameMode* GM = GetWorld()->GetAuthGameMode<AMatchGameMode>())
+		GM->HandleEndPhase(this);
+}
+
 void AMatchPlayerController::OnUnStuckPressed()
 {
 	// If we're the server (listen host) we can do it immediately

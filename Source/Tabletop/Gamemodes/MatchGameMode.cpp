@@ -21,6 +21,13 @@ void AMatchGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutL
     DOREPLIFETIME(AMatchGameState, P1);
     DOREPLIFETIME(AMatchGameState, P2);
     DOREPLIFETIME(AMatchGameState, bTeamsAndTurnsInitialized);
+    DOREPLIFETIME(AMatchGameState, CurrentRound);
+    DOREPLIFETIME(AMatchGameState, MaxRounds);
+    DOREPLIFETIME(AMatchGameState, TurnInRound);
+    DOREPLIFETIME(AMatchGameState, TurnPhase);
+    DOREPLIFETIME(AMatchGameState, CurrentTurn);
+    DOREPLIFETIME(AMatchGameState, ScoreP1);
+    DOREPLIFETIME(AMatchGameState, ScoreP2);
     
 }
 
@@ -60,6 +67,13 @@ void AMatchGameMode::PostLogin(APlayerController* NewPlayer)
     
     FinalizePlayerJoin(NewPlayer); // leave the heavy init here
 
+}
+
+APlayerState* AMatchGameMode::OtherPlayer(APlayerState* PS) const
+{
+    if (const AMatchGameState* S = GS())
+        return (PS == S->P1) ? S->P2 : S->P1;
+    return nullptr;
 }
 
 int32 AMatchGameMode::FindIdx(TArray<FUnitCount>& Arr, FName Unit)
@@ -222,6 +236,14 @@ void AMatchGameMode::HandleStartBattle(APlayerController* PC)
         if (!S->bDeploymentComplete)  return;
 
         S->Phase = EMatchPhase::Battle;
+        S->CurrentRound= 1;
+        S->MaxRounds   = 5;
+        S->TurnInRound = 0;
+        S->TurnPhase   = ETurnPhase::Move;
+
+        // TODO Random??
+        S->CurrentTurn = S->CurrentDeployer;
+        
         S->OnDeploymentChanged.Broadcast();
         S->ForceNetUpdate();
 
@@ -229,6 +251,65 @@ void AMatchGameMode::HandleStartBattle(APlayerController* PC)
         for (FConstPlayerControllerIterator It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
             if (AMatchPlayerController* MPC = Cast<AMatchPlayerController>(*It))
                 MPC->Client_KickPhaseRefresh();
+    }
+}
+
+void AMatchGameMode::HandleEndPhase(APlayerController* PC)
+{
+    if (!HasAuthority() || !PC) return;
+    AMatchGameState* S = GS();
+    if (!S || S->Phase != EMatchPhase::Battle) return;
+
+    // Only the active player may advance
+    if (PC->PlayerState != S->CurrentTurn) return;
+
+    auto Broadcast = [&]()
+    {
+        S->OnDeploymentChanged.Broadcast();
+        S->ForceNetUpdate();
+    };
+
+    // Phase step
+    if (S->TurnPhase != ETurnPhase::Fight)
+    {
+        // Move -> Shoot -> Charge -> Fight
+        switch (S->TurnPhase)
+        {
+        case ETurnPhase::Move:   S->TurnPhase = ETurnPhase::Shoot;  break;
+        case ETurnPhase::Shoot:  S->TurnPhase = ETurnPhase::Charge; break;
+        case ETurnPhase::Charge: S->TurnPhase = ETurnPhase::Fight;  break;
+        default: break;
+        }
+        Broadcast();
+        return;
+    }
+
+    // End of Fight -> end of this player's turn
+    if (S->TurnInRound == 0)
+    {
+        // Switch to other player, start at Move
+        S->TurnInRound = 1;
+        S->CurrentTurn = OtherPlayer(S->CurrentTurn);
+        S->TurnPhase   = ETurnPhase::Move;
+        Broadcast();
+    }
+    else
+    {
+        // Finished both turns in this round
+        S->CurrentRound = FMath::Clamp<uint8>(S->CurrentRound + 1, 1, S->MaxRounds);
+        S->TurnInRound  = 0;
+
+        if (S->CurrentRound > S->MaxRounds)
+        {
+            S->Phase = EMatchPhase::EndGame;
+            Broadcast();
+            return;
+        }
+
+        // Next round starts with the other player than who just ended
+        S->CurrentTurn = OtherPlayer(S->CurrentTurn);
+        S->TurnPhase   = ETurnPhase::Move;
+        Broadcast();
     }
 }
 

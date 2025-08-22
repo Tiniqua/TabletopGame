@@ -34,6 +34,9 @@ public:
 	UFUNCTION(Server, Reliable, BlueprintCallable)
 	void Server_StartBattle();
 
+	UFUNCTION(Server, Reliable, BlueprintCallable)
+	void Server_EndPhase();
+
 	/** Class reference to the deployment widget */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="UI")
 	TSubclassOf<UDeploymentWidget> DeploymentWidgetClass;

@@ -2,6 +2,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Engine/DataTable.h"
 #include "GameFramework/GameModeBase.h"
 #include "GameFramework/GameStateBase.h"
 #include "Net/UnrealNetwork.h"
@@ -36,6 +37,17 @@ public:
 	
 	UPROPERTY(Replicated)
 	bool bTeamsAndTurnsInitialized = false;
+
+	UPROPERTY(ReplicatedUsing=OnRep_Match) uint8 CurrentRound = 1;
+	UPROPERTY(ReplicatedUsing=OnRep_Match) uint8 MaxRounds = 5;
+	UPROPERTY(ReplicatedUsing=OnRep_Match) uint8 TurnInRound = 0; // 0=first player's turn, 1=second
+	UPROPERTY(ReplicatedUsing=OnRep_Match) ETurnPhase TurnPhase = ETurnPhase::Move;
+	UPROPERTY(ReplicatedUsing=OnRep_Match) APlayerState* CurrentTurn = nullptr;
+
+	UPROPERTY(ReplicatedUsing=OnRep_Match) int32 ScoreP1 = 0;
+	UPROPERTY(ReplicatedUsing=OnRep_Match) int32 ScoreP2 = 0;
+
+	UFUNCTION() void OnRep_Match() { OnDeploymentChanged.Broadcast(); }
 	
 	UPROPERTY(ReplicatedUsing=OnRep_Deployment) EMatchPhase Phase = EMatchPhase::Deployment;
 
@@ -77,6 +89,7 @@ public:
 	// Server RPC endpoints (called by PC server functions)
 	void HandleRequestDeploy(class APlayerController* PC, FName UnitId, const FTransform& Where);
 	void HandleStartBattle(class APlayerController* PC);
+	void HandleEndPhase(class APlayerController* PC);
 
 	void FinalizePlayerJoin(APlayerController* PC);
 
@@ -88,6 +101,9 @@ protected:
 
 private:
 	class AMatchGameState* GS() const { return GetGameState<AMatchGameState>(); }
+
+	APlayerState* OtherPlayer(APlayerState* PS) const;
+	
 
 	static int32 FindIdx(TArray<FUnitCount>& Arr, FName Unit);
 	bool CanDeployAt(APlayerController* PC, const FVector& WorldLocation) const;
