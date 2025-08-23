@@ -8,6 +8,9 @@
 #include "Net/UnrealNetwork.h"
 #include "MatchGameMode.generated.h"
 
+class AMatchPlayerController;
+class AUnitBase;
+
 enum class EFaction : uint8;
 struct FUnitCount;
 UENUM(BlueprintType)
@@ -27,6 +30,15 @@ enum class ETurnPhase : uint8
 	Fight
 };
 
+USTRUCT()
+struct FCombatPreview
+{
+	GENERATED_BODY()
+	UPROPERTY() AUnitBase* Attacker = nullptr;
+	UPROPERTY() AUnitBase* Target   = nullptr;
+	UPROPERTY() ETurnPhase Phase    = ETurnPhase::Move; // usually Shoot/Charge/Fight
+};
+
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnDeploymentChanged);
 
 UCLASS()
@@ -34,6 +46,10 @@ class TABLETOP_API AMatchGameState : public AGameStateBase
 {
 	GENERATED_BODY()
 public:
+
+	UPROPERTY(ReplicatedUsing=OnRep_Match)
+	FCombatPreview Preview;
+	UFUNCTION() void OnRep_Match(){ OnDeploymentChanged.Broadcast(); }
 	
 	UPROPERTY(Replicated)
 	bool bTeamsAndTurnsInitialized = false;
@@ -46,8 +62,6 @@ public:
 
 	UPROPERTY(ReplicatedUsing=OnRep_Match) int32 ScoreP1 = 0;
 	UPROPERTY(ReplicatedUsing=OnRep_Match) int32 ScoreP2 = 0;
-
-	UFUNCTION() void OnRep_Match() { OnDeploymentChanged.Broadcast(); }
 	
 	UPROPERTY(ReplicatedUsing=OnRep_Deployment) EMatchPhase Phase = EMatchPhase::Deployment;
 
@@ -93,6 +107,30 @@ public:
 
 	void FinalizePlayerJoin(APlayerController* PC);
 
+	// Movement
+	bool ValidateMove(AUnitBase* Unit, const FVector& Dest, float& OutDistInches) const;
+	void Handle_MoveUnit(AMatchPlayerController* PC, AUnitBase* Unit, const FVector& Dest);
+
+	// Targeting & shooting
+	bool ValidateShoot(AUnitBase* Attacker, AUnitBase* Target) const;
+	void Handle_SelectTarget(AMatchPlayerController* PC, AUnitBase* Attacker, AUnitBase* Target);
+	void Handle_ConfirmShoot(AMatchPlayerController* PC, AUnitBase* Attacker, AUnitBase* Target);
+	
+	// Cancels any active GS->Preview if this PC owns the Attacker and it's their turn
+	void Handle_CancelPreview(class AMatchPlayerController* PC, class AUnitBase* Attacker);
+
+
+	// Charge & fight (stubs now)
+	bool ValidateCharge(AUnitBase* Attacker, AUnitBase* Target) const;
+	void Handle_AttemptCharge(AMatchPlayerController* PC, AUnitBase* Attacker, AUnitBase* Target);
+	bool ValidateFight(AUnitBase* Attacker, AUnitBase* Target) const;
+	void Handle_Fight(AMatchPlayerController* PC, AUnitBase* Attacker, AUnitBase* Target);
+
+	// Per-turn reset (call when starting Move for CurrentTurn)
+	void ResetTurnFor(APlayerState* PS);
+	
+	float CmPerTabletopInch() const { return 2.54f * TabletopToUnrealInchScale; }
+
 
 
 protected:
@@ -100,11 +138,17 @@ protected:
 	virtual void PostLogin(APlayerController* NewPlayer) override;
 
 private:
+	void ResetMoveBudgetsFor(class APlayerState* TurnOwner);
+	
 	class AMatchGameState* GS() const { return GetGameState<AMatchGameState>(); }
 
 	APlayerState* OtherPlayer(APlayerState* PS) const;
-	
 
+	UPROPERTY(EditAnywhere, Category="Scale")
+	float TabletopToUnrealInchScale = 20.f; // 1 tabletop inch == 20 UE inches (exact). Use 19.685 for 50 cm/in.
+
+	// Helper (cm per tabletop inch)
+	
 	static int32 FindIdx(TArray<FUnitCount>& Arr, FName Unit);
 	bool CanDeployAt(APlayerController* PC, const FVector& WorldLocation) const;
 	void Server_RequestDeploy_Implementation(APlayerController* PC, TSubclassOf<AActor> UnitClass,

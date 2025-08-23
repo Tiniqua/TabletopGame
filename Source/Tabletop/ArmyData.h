@@ -78,8 +78,8 @@ struct FUnitRow : public FTableRowBase
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32   Save = 3;
 
     // Squad sizing
-    UPROPERTY(EditAnywhere, BlueprintReadWrite) int32   MinModels = 5;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite) int32   MaxModels = 10;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 Models = 5;   // NEW
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 DefaultWeaponIndex = 0; // NEW
 
     // Tags / simple abilities
     UPROPERTY(EditAnywhere, BlueprintReadWrite) TArray<FName> Abilities;

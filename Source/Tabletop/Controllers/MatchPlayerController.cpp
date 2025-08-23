@@ -7,6 +7,7 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerStart.h"
 #include "Tabletop/LibraryHelpers.h"
+#include "Tabletop/Actors/UnitBase.h"
 #include "Tabletop/Gamemodes/MatchGameMode.h"
 
 
@@ -78,28 +79,197 @@ void AMatchPlayerController::BeginDeployForUnit(FName UnitId)
 
 void AMatchPlayerController::OnRightClickCancel()
 {
-    PendingDeployUnit = NAME_None;
-	StopDeployCursorFeedback();
+    AMatchGameState* S = GS();
+    if (!S) return;
+
+    if (S->Phase == EMatchPhase::Deployment)
+    {
+        PendingDeployUnit = NAME_None;
+        StopDeployCursorFeedback();
+        return;
+    }
+
+    // Battle
+    if (bTargetMode && SelectedUnit)
+    {
+        // Cancel preview on server and exit target mode
+        Server_CancelPreview(SelectedUnit);
+        bTargetMode = false;
+        return;
+    }
+
+    // Otherwise clear local selection
+    ClearSelection();
 }
 
 void AMatchPlayerController::OnLeftClick()
 {
-	if (PendingDeployUnit == NAME_None) return;
+    AMatchGameState* S = GS();
+    if (!S) return;
 
-	FHitResult Hit;
-	if (!TraceDeployLocation(Hit)) return;
+    if (S->Phase == EMatchPhase::Deployment)
+    {
+    	if (PendingDeployUnit == NAME_None) return;
 
-	// Build a sensible transform (face camera yaw, keep upright)
-	const FRotator YawOnly(0.f, GetControlRotation().Yaw, 0.f);
-	FTransform Where(YawOnly, Hit.ImpactPoint);
+    	FHitResult Hit;
+    	if (!TraceGround_Deploy(Hit)) return;
 
-	Server_RequestDeploy(PendingDeployUnit, Where);
+    	const FRotator YawOnly(0.f, GetControlRotation().Yaw, 0.f);
+    	const FTransform Where(YawOnly, Hit.ImpactPoint);
 
-	// Clear pending—server will validate turn & counts
-	PendingDeployUnit = NAME_None;
+    	Server_RequestDeploy(PendingDeployUnit, Where);
+    	PendingDeployUnit = NAME_None;
+    	StopDeployCursorFeedback();
+    	return;
+    }
 
-	StopDeployCursorFeedback();
+    // ---- Battle routing ----
+    const bool bMyTurn = (S->CurrentTurn == PlayerState);
+    if (!bMyTurn)
+    {
+        // Not your turn: ignore clicks (or allow inspecting enemies if you want)
+        return;
+    }
+
+    switch (S->TurnPhase)
+    {
+    case ETurnPhase::Move:
+    {
+        // If we have a friendly unit selected, a ground click is a move
+        if (SelectedUnit && SelectedUnit->OwningPS == PlayerState)
+        {
+        	FHitResult Hit;
+        	if (TraceGround_Battle(Hit))
+        	{
+        		Server_MoveUnit(SelectedUnit, Hit.ImpactPoint);
+        		return;
+        	}
+        }
+        // Otherwise try selecting a friendly unit
+        if (AUnitBase* U = TraceUnit())
+        {
+            if (U->OwningPS == PlayerState)
+                SelectUnit(U);
+        }
+        break;
+    }
+
+    case ETurnPhase::Shoot:
+    {
+        // Entered target mode from UI? Then click enemy to set preview
+        if (bTargetMode && SelectedUnit && SelectedUnit->OwningPS == PlayerState)
+        {
+            if (AUnitBase* Target = TraceUnit())
+            {
+                if (Target->OwningPS != PlayerState)
+                {
+                    Server_SelectTarget(SelectedUnit, Target);
+                    // remain in target mode until Confirm or cancel
+                }
+            }
+            return;
+        }
+
+        // Not in target mode: allow selecting one of your units
+        if (AUnitBase* U = TraceUnit())
+        {
+            if (U->OwningPS == PlayerState)
+                SelectUnit(U);
+        }
+        break;
+    }
+
+    case ETurnPhase::Charge:
+    {
+        // Same “select target” flow as shooting; Confirm will attempt the charge
+        if (bTargetMode && SelectedUnit && SelectedUnit->OwningPS == PlayerState)
+        {
+            if (AUnitBase* Target = TraceUnit())
+            {
+                if (Target->OwningPS != PlayerState)
+                {
+                    Server_SelectTarget(SelectedUnit, Target); // sets replicated preview
+                }
+            }
+            return;
+        }
+        if (AUnitBase* U = TraceUnit())
+        {
+            if (U->OwningPS == PlayerState)
+                SelectUnit(U);
+        }
+        break;
+    }
+
+    case ETurnPhase::Fight:
+    {
+        // Target mode: pick enemy in melee, Confirm will call Server_Fight
+        if (bTargetMode && SelectedUnit && SelectedUnit->OwningPS == PlayerState)
+        {
+            if (AUnitBase* Target = TraceUnit())
+            {
+                if (Target->OwningPS != PlayerState)
+                {
+                    Server_SelectTarget(SelectedUnit, Target);
+                }
+            }
+            return;
+        }
+        if (AUnitBase* U = TraceUnit())
+        {
+            if (U->OwningPS == PlayerState)
+                SelectUnit(U);
+        }
+        break;
+    }
+
+    default: break;
+    }
 }
+
+void AMatchPlayerController::Client_OnUnitMoved_Implementation(AUnitBase* Unit, float SpentTTIn, float NewBudgetTTIn)
+{
+	// Only clear if we were actually selecting that unit (safe guard)
+	if (SelectedUnit == Unit)
+	{
+		// Prefer your existing helper so it broadcasts OnSelectedChanged etc.
+		SelectUnit(nullptr);
+	}
+
+	// Just in case we were in any special mode
+	ExitTargetMode();
+
+#if !(UE_BUILD_SHIPPING)
+	if (GEngine && Unit)
+	{
+		GEngine->AddOnScreenDebugMessage(
+			-1, 3.f, FColor::Silver,
+			FString::Printf(TEXT("[Client] Deselect after move: %s  Spent=%.1f TT-in  Budget=%.1f TT-in"),
+				*Unit->GetName(), SpentTTIn, NewBudgetTTIn));
+	}
+#endif
+}
+
+void AMatchPlayerController::Client_OnMoveDenied_OverBudget_Implementation(AUnitBase* Unit, float AttemptTTIn, float BudgetTTIn)
+{
+	// Only clear if we were trying to move this unit
+	if (SelectedUnit == Unit)
+	{
+		SelectUnit(nullptr);   // your helper that broadcasts OnSelectedChanged
+	}
+	ExitTargetMode();          // just in case
+
+	#if !(UE_BUILD_SHIPPING)
+	if (GEngine && Unit)
+	{
+		GEngine->AddOnScreenDebugMessage(
+			-1, 3.f, FColor::Red,
+			FString::Printf(TEXT("[MoveDenied] %s  Attempt=%.1f TT-in  Budget=%.1f TT-in"),
+				*Unit->GetName(), AttemptTTIn, BudgetTTIn));
+	}
+#endif
+}
+
 
 bool AMatchPlayerController::TraceDeployLocation(FHitResult& OutHit) const
 {
@@ -162,6 +332,44 @@ void AMatchPlayerController::RefreshPhaseUI()
 
 }
 
+bool AMatchPlayerController::TraceGround(FHitResult& OutHit, TEnumAsByte<ECollisionChannel> Channel) const
+{
+	const ETraceTypeQuery TraceType = UEngineTypes::ConvertToTraceType(Channel.GetValue());
+	return GetHitResultUnderCursorByChannel(TraceType, /*bTraceComplex*/ false, OutHit);
+}
+
+
+AUnitBase* AMatchPlayerController::TraceUnit() const
+{
+	FHitResult Hit;
+	const ETraceTypeQuery TraceType =
+		UEngineTypes::ConvertToTraceType(UnitTraceChannel.GetValue());
+	if (GetHitResultUnderCursorByChannel(TraceType, /*bTraceComplex*/ false, Hit))
+	{
+		return Cast<AUnitBase>(Hit.GetActor());
+	}
+	return nullptr;
+}
+
+void AMatchPlayerController::SelectUnit(AUnitBase* U)
+{
+	if (SelectedUnit == U) return;
+
+	if (SelectedUnit) SelectedUnit->OnDeselected();
+	SelectedUnit = U;
+	if (SelectedUnit) SelectedUnit->OnSelected();
+
+	OnSelectedChanged.Broadcast(SelectedUnit);
+}
+
+void AMatchPlayerController::ClearSelection()
+{
+	if (SelectedUnit) SelectedUnit->OnDeselected();
+	SelectedUnit = nullptr;
+	OnSelectedChanged.Broadcast(nullptr);
+}
+
+
 void AMatchPlayerController::Client_KickPhaseRefresh_Implementation()
 {
 	TryBindToGameState();
@@ -195,6 +403,45 @@ void AMatchPlayerController::Server_EndPhase_Implementation()
 {
 	if (AMatchGameMode* GM = GetWorld()->GetAuthGameMode<AMatchGameMode>())
 		GM->HandleEndPhase(this);
+}
+
+void AMatchPlayerController::Server_MoveUnit_Implementation(AUnitBase* Unit, FVector Dest)
+{
+	if (AMatchGameMode* GM = GetWorld()->GetAuthGameMode<AMatchGameMode>())
+		GM->Handle_MoveUnit(this, Unit, Dest);
+}
+
+void AMatchPlayerController::Server_SelectTarget_Implementation(AUnitBase* Attacker, AUnitBase* Target)
+{
+	if (AMatchGameMode* GM = GetWorld()->GetAuthGameMode<AMatchGameMode>())
+		GM->Handle_SelectTarget(this, Attacker, Target);
+}
+
+void AMatchPlayerController::Server_CancelPreview_Implementation(AUnitBase* Attacker)
+{
+	if (AMatchGameMode* GM = GetWorld()->GetAuthGameMode<AMatchGameMode>())
+	{
+		GM->Handle_CancelPreview(this, Attacker);
+	}
+}
+
+
+void AMatchPlayerController::Server_ConfirmShoot_Implementation(AUnitBase* Attacker, AUnitBase* Target)
+{
+	if (AMatchGameMode* GM = GetWorld()->GetAuthGameMode<AMatchGameMode>())
+		GM->Handle_ConfirmShoot(this, Attacker, Target);
+}
+
+void AMatchPlayerController::Server_AttemptCharge_Implementation(AUnitBase* Attacker, AUnitBase* Target)
+{
+	if (AMatchGameMode* GM = GetWorld()->GetAuthGameMode<AMatchGameMode>())
+		GM->Handle_AttemptCharge(this, Attacker, Target);
+}
+
+void AMatchPlayerController::Server_Fight_Implementation(AUnitBase* Attacker, AUnitBase* Target)
+{
+	if (AMatchGameMode* GM = GetWorld()->GetAuthGameMode<AMatchGameMode>())
+		GM->Handle_Fight(this, Attacker, Target);
 }
 
 void AMatchPlayerController::OnUnStuckPressed()

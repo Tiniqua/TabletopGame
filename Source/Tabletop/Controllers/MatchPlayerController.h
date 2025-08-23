@@ -9,16 +9,38 @@
 
 #include "MatchPlayerController.generated.h"
 
+class AUnitBase;
 class AMatchGameState;
 class UDeploymentWidget;
 class UGameplayWidget;
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnSelectedChanged, class AUnitBase*, NewSelection);
+
 
 UCLASS()
 class TABLETOP_API AMatchPlayerController : public APlayerController
 {
 	GENERATED_BODY()
 public:
+	UPROPERTY()
+	AUnitBase* SelectedUnit = nullptr;
+	UPROPERTY()
+	bool bTargetMode = false;
 
+	DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnSelectedChanged, AUnitBase*, NewSel);
+	UPROPERTY(BlueprintAssignable) FOnSelectedChanged OnSelectedChanged;
+
+	UFUNCTION(Client, Reliable)
+	void Client_OnUnitMoved(class AUnitBase* Unit, float SpentTTIn, float NewBudgetTTIn);
+
+	UFUNCTION(Client, Reliable)
+	void Client_OnMoveDenied_OverBudget(class AUnitBase* Unit, float AttemptTTIn, float BudgetTTIn);
+
+
+	// Expose helpers for the widget to call
+	UFUNCTION(BlueprintCallable) void EnterTargetMode() { bTargetMode = true; }
+	UFUNCTION(BlueprintCallable) void ExitTargetMode()  { bTargetMode = false; }
+	
 	UFUNCTION(Client, Reliable)
 	void Client_KickUIRefresh();
 	
@@ -36,6 +58,20 @@ public:
 
 	UFUNCTION(Server, Reliable, BlueprintCallable)
 	void Server_EndPhase();
+
+	// Server RPCs
+	UFUNCTION(Server, Reliable)
+	void Server_MoveUnit(AUnitBase* Unit, FVector Dest);
+	UFUNCTION(Server, Reliable)
+	void Server_SelectTarget(AUnitBase* Attacker, AUnitBase* Target);
+	UFUNCTION(Server, Reliable)
+	void Server_CancelPreview(AUnitBase* Attacker);
+	UFUNCTION(Server, Reliable)
+	void Server_ConfirmShoot(AUnitBase* Attacker, AUnitBase* Target);
+	UFUNCTION(Server, Reliable)
+	void Server_AttemptCharge(AUnitBase* Attacker, AUnitBase* Target);
+	UFUNCTION(Server, Reliable)
+	void Server_Fight(AUnitBase* Attacker, AUnitBase* Target);
 
 	/** Class reference to the deployment widget */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="UI")
@@ -104,6 +140,16 @@ private:
 	UPROPERTY(EditDefaultsOnly, Category="Deploy")
 	TEnumAsByte<ECollisionChannel> DeployTraceChannel = ECC_GameTraceChannel1;
 
+	UPROPERTY(EditDefaultsOnly, Category="Trace")
+	TEnumAsByte<ECollisionChannel> BattleGroundTraceChannel = ECC_GameTraceChannel3;
+
+	bool TraceGround(FHitResult& OutHit, TEnumAsByte<ECollisionChannel> Channel) const;
+	
+	bool TraceGround_Deploy(FHitResult& OutHit) const { return TraceGround(OutHit, DeployTraceChannel); }
+	bool TraceGround_Battle(FHitResult& OutHit) const { return TraceGround(OutHit, BattleGroundTraceChannel); }
+
+	
+
 	UFUNCTION()
 	void OnUnStuckPressed();
 
@@ -113,4 +159,16 @@ private:
 
 	/** Shared utility the server calls to do the actual teleport */
 	bool TeleportPawnToFirstPlayerStart();
+
+protected:
+	// NEW: channel to click units (matches UnitBase::SelectCollision setup)
+	UPROPERTY(EditDefaultsOnly, Category="Trace")
+	TEnumAsByte<ECollisionChannel> UnitTraceChannel = ECC_GameTraceChannel2;
+
+	// Helpers
+	//bool TraceGround(FHitResult& OutHit) const;
+	class AUnitBase* TraceUnit() const;
+
+	void SelectUnit(class AUnitBase* U);
+	void ClearSelection();
 };
