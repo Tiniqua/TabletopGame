@@ -39,6 +39,17 @@ struct FCombatPreview
 	UPROPERTY() ETurnPhase Phase    = ETurnPhase::Move; // usually Shoot/Charge/Fight
 };
 
+// ignore bad dupe im lazy
+USTRUCT()
+struct FActionPreview
+{
+	GENERATED_BODY()
+
+	UPROPERTY() class AUnitBase* Attacker = nullptr;
+	UPROPERTY() class AUnitBase* Target   = nullptr;
+	UPROPERTY() ETurnPhase Phase = ETurnPhase::Move;
+};
+
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnDeploymentChanged);
 
 UCLASS()
@@ -53,6 +64,11 @@ public:
 	
 	UPROPERTY(Replicated)
 	bool bTeamsAndTurnsInitialized = false;
+
+	UPROPERTY(ReplicatedUsing=OnRep_Preview)
+	FActionPreview ActionPreview;
+
+	UFUNCTION() void OnRep_Preview() { OnDeploymentChanged.Broadcast(); }
 
 	UPROPERTY(ReplicatedUsing=OnRep_Match) uint8 CurrentRound = 1;
 	UPROPERTY(ReplicatedUsing=OnRep_Match) uint8 MaxRounds = 5;
@@ -138,7 +154,8 @@ protected:
 	virtual void PostLogin(APlayerController* NewPlayer) override;
 
 private:
-	void ResetMoveBudgetsFor(class APlayerState* TurnOwner);
+	UFUNCTION(BlueprintCallable, Category="Round")
+	void ResetUnitRoundStateFor(class APlayerState* TurnOwner);
 	
 	class AMatchGameState* GS() const { return GetGameState<AMatchGameState>(); }
 

@@ -39,6 +39,8 @@ void AMatchGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutL
     DOREPLIFETIME(AMatchGameState, CurrentTurn);
     DOREPLIFETIME(AMatchGameState, ScoreP1);
     DOREPLIFETIME(AMatchGameState, ScoreP2);
+    DOREPLIFETIME(AMatchGameState, Preview);
+    DOREPLIFETIME(AMatchGameState, ActionPreview);
     
 }
 
@@ -158,23 +160,16 @@ void AMatchGameMode::Handle_MoveUnit(AMatchPlayerController* PC, AUnitBase* Unit
 
 
 
-bool AMatchGameMode::ValidateShoot(AUnitBase* Attacker, AUnitBase* Target) const
+bool AMatchGameMode::ValidateShoot(AUnitBase* A, AUnitBase* T) const
 {
-    if (!Attacker || !Target) return false;
-    if (Attacker == Target)   return false;
-    if (Attacker->ModelsCurrent <= 0 || Target->ModelsCurrent <= 0) return false;
+    if (!A || !T || A==T) return false;
+    if (A->ModelsCurrent <= 0 || T->ModelsCurrent <= 0) return false;
+    if (A->OwningPS == T->OwningPS) return false;
+    if (A->bHasShot) return false;
 
-    // Ownership: cannot shoot friendlies
-    if (Attacker->OwningPS == Target->OwningPS) return false;
-
-    // One shot per unit per turn
-    if (Attacker->bHasShot) return false;
-
-    const float dist = DistInches(Attacker->GetActorLocation(), Target->GetActorLocation());
-    const float rng  = Attacker->GetWeaponRange(); // implement in AUnitBase from weapon profile
-    if (rng <= 0.f) return false;
-
-    return dist <= rng;
+    const float distTT = FVector::Dist(A->GetActorLocation(), T->GetActorLocation()) / CmPerTabletopInch();
+    const float rngTT  = A->GetWeaponRange(); // stored as tabletop inches
+    return (rngTT > 0.f) && (distTT <= rngTT);
 }
 
 void AMatchGameMode::Handle_SelectTarget(AMatchPlayerController* PC, AUnitBase* Attacker, AUnitBase* Target)
@@ -273,19 +268,16 @@ void AMatchGameMode::Handle_CancelPreview(AMatchPlayerController* PC, AUnitBase*
 }
 
 
-bool AMatchGameMode::ValidateCharge(AUnitBase* Attacker, AUnitBase* Target) const
+bool AMatchGameMode::ValidateCharge(AUnitBase* A, AUnitBase* T) const
 {
-    if (!Attacker || !Target) return false;
-    if (Attacker->OwningPS == Target->OwningPS) return false;
-    if (Attacker->ModelsCurrent <= 0 || Target->ModelsCurrent <= 0) return false;
+    if (!A || !T) return false;
+    if (A->OwningPS == T->OwningPS) return false;
+    if (A->ModelsCurrent <= 0 || T->ModelsCurrent <= 0) return false;
+    if (A->bChargeAttempted) return false;
 
-    // One attempt per turn
-    if (Attacker->bChargeAttempted) return false;
-
-    // Simple range gate — replace with Attacker->GetChargeRange() if you add it
-    constexpr float ChargeRangeInches = 12.f;
-    const float dist = DistInches(Attacker->GetActorLocation(), Target->GetActorLocation());
-    return dist <= ChargeRangeInches;
+    constexpr float ChargeRangeTT = 12.f; // tabletop inches
+    const float distTT = FVector::Dist(A->GetActorLocation(), T->GetActorLocation()) / CmPerTabletopInch();
+    return distTT <= ChargeRangeTT;
 }
 
 void AMatchGameMode::Handle_AttemptCharge(AMatchPlayerController* PC, AUnitBase* Attacker, AUnitBase* Target)
@@ -318,15 +310,14 @@ void AMatchGameMode::Handle_AttemptCharge(AMatchPlayerController* PC, AUnitBase*
     S->ForceNetUpdate();
 }
 
-bool AMatchGameMode::ValidateFight(AUnitBase* Attacker, AUnitBase* Target) const
+bool AMatchGameMode::ValidateFight(AUnitBase* A, AUnitBase* T) const
 {
-    if (!Attacker || !Target) return false;
-    if (Attacker->OwningPS == Target->OwningPS) return false;
-    if (Attacker->ModelsCurrent <= 0 || Target->ModelsCurrent <= 0) return false;
+    if (!A || !T) return false;
+    if (A->OwningPS == T->OwningPS) return false;
+    if (A->ModelsCurrent <= 0 || T->ModelsCurrent <= 0) return false;
 
-    // Must be in melee / engaged; also check a small distance
-    const float dist = DistInches(Attacker->GetActorLocation(), Target->GetActorLocation());
-    const bool bInMelee = (dist <= 2.f) || (Attacker->bEngaged && Target->bEngaged);
+    const float distTT = FVector::Dist(A->GetActorLocation(), T->GetActorLocation()) / CmPerTabletopInch();
+    const bool bInMelee = (distTT <= 2.f) || (A->bEngaged && T->bEngaged);
     return bInMelee;
 }
 
@@ -380,7 +371,7 @@ void AMatchGameMode::PostLogin(APlayerController* NewPlayer)
 
 }
 
-void AMatchGameMode::ResetMoveBudgetsFor(APlayerState* TurnOwner)
+void AMatchGameMode::ResetUnitRoundStateFor(APlayerState* TurnOwner)
 {
     if (!HasAuthority() || !TurnOwner) return;
 
@@ -391,15 +382,29 @@ void AMatchGameMode::ResetMoveBudgetsFor(APlayerState* TurnOwner)
         {
             if (U->OwningPS == TurnOwner)
             {
-                U->MoveBudgetInches = U->MoveMaxInches;   // reset to full budget for this move phase
+                // Movement
+                U->MoveBudgetInches = U->MoveMaxInches;
+
+                // Actions
+                U->bHasShot         = false;
+                U->bChargeAttempted = false;
+
+                // NOTE: Intentionally leaving U->bEngaged as-is.
+                // If you want to clear engagement each round, uncomment:
+                // U->bEngaged = false;
+
                 U->ForceNetUpdate();
+
 #if !(UE_BUILD_SHIPPING)
                 if (GEngine)
                 {
                     GEngine->AddOnScreenDebugMessage(
                         -1, 5.f, FColor::Cyan,
-                        FString::Printf(TEXT("[MoveReset] %s Budget=%.1f\" (Max=%.1f\")"),
-                            *U->GetName(), U->MoveBudgetInches, U->MoveMaxInches));
+                        FString::Printf(TEXT("[RoundReset] %s  Move=%.1f\"/%.1f\"  Shot=%s  Charge=%s"),
+                            *U->GetName(),
+                            U->MoveBudgetInches, U->MoveMaxInches,
+                            U->bHasShot ? TEXT("Used") : TEXT("Ready"),
+                            U->bChargeAttempted ? TEXT("Used") : TEXT("Ready")));
                 }
 #endif
             }
@@ -628,7 +633,8 @@ void AMatchGameMode::HandleStartBattle(APlayerController* PC)
 
         // TODO Random??
         S->CurrentTurn = S->CurrentDeployer;
-        ResetMoveBudgetsFor(S->CurrentTurn);
+        if (AMatchGameMode* GM = GetWorld()->GetAuthGameMode<AMatchGameMode>())
+            GM->ResetUnitRoundStateFor(S->CurrentTurn);
         
         S->OnDeploymentChanged.Broadcast();
         S->ForceNetUpdate();
@@ -677,7 +683,8 @@ void AMatchGameMode::HandleEndPhase(APlayerController* PC)
         S->TurnInRound = 1;
         S->CurrentTurn = OtherPlayer(S->CurrentTurn);
         S->TurnPhase   = ETurnPhase::Move;
-        ResetMoveBudgetsFor(S->CurrentTurn);
+        if (AMatchGameMode* GM = GetWorld()->GetAuthGameMode<AMatchGameMode>())
+            GM->ResetUnitRoundStateFor(S->CurrentTurn);
         Broadcast();
     }
     else
@@ -696,7 +703,8 @@ void AMatchGameMode::HandleEndPhase(APlayerController* PC)
         // Next round starts with the other player than who just ended
         S->CurrentTurn = OtherPlayer(S->CurrentTurn);
         S->TurnPhase   = ETurnPhase::Move;
-        ResetMoveBudgetsFor(S->CurrentTurn);
+        if (AMatchGameMode* GM = GetWorld()->GetAuthGameMode<AMatchGameMode>())
+            GM->ResetUnitRoundStateFor(S->CurrentTurn);
         Broadcast();
     }
 }

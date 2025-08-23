@@ -169,7 +169,10 @@ void UTurnContextWidget::ShowActionPhases(AUnitBase* Sel)
     if (CancelBtn)        CancelBtn->SetIsEnabled(false);
     SetPrimary(TEXT(""), false);
 
-    const bool bPreviewForMe = (S->Preview.Attacker == Sel) && (S->Preview.Target != nullptr);
+    const bool bPreviewForMe =
+    (S->TurnPhase == ETurnPhase::Shoot) &&
+    (S->Preview.Attacker == Sel) &&
+    (S->Preview.Target   != nullptr);
 
     if (bPreviewForMe)
         FillTarget(S->Preview.Target);
