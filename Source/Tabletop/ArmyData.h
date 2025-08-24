@@ -76,6 +76,7 @@ struct FUnitRow : public FTableRowBase
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32   Toughness = 4;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32   Wounds = 1;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32   Save = 3;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) int32   ObjectiveControlPerModel = 1;
 
     // Squad sizing
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 Models = 5;   // NEW

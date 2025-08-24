@@ -1,4 +1,6 @@
 #include "UnitBase.h"
+
+#include "ObjectiveMarker.h"
 #include "Net/UnrealNetwork.h"
 #include "Components/SphereComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -42,6 +44,8 @@ void AUnitBase::Server_InitFromRow(APlayerState* OwnerPS, const FUnitRow& Row, i
 
     OwningPS = OwnerPS;
     UnitId   = Row.UnitId;
+    ObjectiveControlPerModel = Row.ObjectiveControlPerModel;
+
 
     if (const ATabletopPlayerState* TPS = Cast<ATabletopPlayerState>(OwnerPS))
     {
@@ -100,6 +104,23 @@ void AUnitBase::GetModelWorldLocations(TArray<FVector>& Out) const
         if (IsValid(C)) Out.Add(C->GetComponentLocation());
 
     if (Out.Num() == 0) Out.Add(GetActorLocation());
+}
+
+int32 AUnitBase::GetObjectiveControlAt(const AObjectiveMarker* Marker) const
+{
+    if (!Marker || ObjectiveControlPerModel <= 0) return 0;
+
+    // You already have something like this; use your version.
+    TArray<FVector> ModelLocs;
+    GetModelWorldLocations(ModelLocs);              // <- your existing helper
+    if (ModelLocs.Num() == 0) return 0;
+
+    int32 ModelsIn = 0;
+    for (const FVector& L : ModelLocs)
+    {
+        if (Marker->IsInside(L)) ++ModelsIn;
+    }
+    return ModelsIn * ObjectiveControlPerModel;
 }
 
 
@@ -273,6 +294,8 @@ void AUnitBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetim
     DOREPLIFETIME(AUnitBase, bHasShot);
     DOREPLIFETIME(AUnitBase, ToughnessRep);
     DOREPLIFETIME(AUnitBase, WoundsRep);
+    DOREPLIFETIME(AUnitBase, ObjectiveControlPerModel);
+
 
     DOREPLIFETIME(AUnitBase, WeaponRangeInchesRep);
     DOREPLIFETIME(AUnitBase, WeaponAttacksRep);

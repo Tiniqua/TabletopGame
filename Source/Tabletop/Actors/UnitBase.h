@@ -29,7 +29,11 @@ public:
     // Chosen weapon index within the row (server sets, clients read)
     UPROPERTY(Replicated) int32 WeaponIndex = 0;
 
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Replicated, Category="Stats|Objective")
+    int32 ObjectiveControlPerModel = 1;
 
+    UFUNCTION(BlueprintPure, Category="Objective")
+    int32 GetObjectiveControlAt(const class AObjectiveMarker* Marker) const;
     
     // ---------- Runtime state (replicated) ----------
     UPROPERTY(ReplicatedUsing=OnRep_Models) int32 ModelsCurrent = 0;

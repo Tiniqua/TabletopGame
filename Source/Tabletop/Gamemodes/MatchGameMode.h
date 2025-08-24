@@ -72,6 +72,9 @@ public:
 	UPROPERTY(ReplicatedUsing=OnRep_Preview)
 	FActionPreview ActionPreview;
 
+	UPROPERTY(Transient, BlueprintReadOnly)
+	TArray<class AObjectiveMarker*> Objectives;
+
 	UFUNCTION() void OnRep_Preview() { OnDeploymentChanged.Broadcast(); }
 
 	UPROPERTY(ReplicatedUsing=OnRep_Match) uint8 CurrentRound = 1;
@@ -105,7 +108,7 @@ public:
 	UFUNCTION() void OnRep_Players()    { OnDeploymentChanged.Broadcast(); }
 
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
-	
+	virtual void BeginPlay() override;
 };
 
 UCLASS()
@@ -124,8 +127,10 @@ public:
 	void HandleRequestDeploy(class APlayerController* PC, FName UnitId, const FTransform& Where);
 	void HandleStartBattle(class APlayerController* PC);
 	void HandleEndPhase(class APlayerController* PC);
+	void ScoreObjectivesForRound();
 
 	void FinalizePlayerJoin(APlayerController* PC);
+	void TallyObjectives_EndOfRound();
 
 	// Movement
 	bool ValidateMove(AUnitBase* Unit, const FVector& Dest, float& OutDistInches) const;

@@ -3,9 +3,11 @@
 
 #include "EngineUtils.h"
 #include "SetupGamemode.h"
+#include "Kismet/GameplayStatics.h"
 #include "Net/UnrealNetwork.h"
 #include "Tabletop/Actors/CoverVolume.h"
 #include "Tabletop/Actors/DeploymentZone.h"
+#include "Tabletop/Actors/ObjectiveMarker.h"
 #include "Tabletop/Actors/UnitBase.h"
 #include "Tabletop/Characters/TabletopCharacter.h"
 #include "Tabletop/Controllers/MatchPlayerController.h"
@@ -44,6 +46,29 @@ namespace
     }
 }
 
+static APlayerState* ResolveControllerPS(const AMatchGameState* S, const APlayerController* PC)
+{
+    if (!S || !PC) return nullptr;
+
+    APlayerState* PS = PC->PlayerState;
+    if (!PS) return nullptr;
+
+    // 1) Direct pointer match (fast path, preferred)
+    if (PS == S->P1) return S->P1;
+    if (PS == S->P2) return S->P2;
+
+    // 2) Fallback: TeamNum mapping (helps after seamless travel / swaps)
+    const ATabletopPlayerState* TPS  = Cast<ATabletopPlayerState>(PS);
+    const ATabletopPlayerState* TP1  = S->P1 ? Cast<ATabletopPlayerState>(S->P1) : nullptr;
+    const ATabletopPlayerState* TP2  = S->P2 ? Cast<ATabletopPlayerState>(S->P2) : nullptr;
+
+    if (TPS && TP1 && TPS->TeamNum > 0 && TPS->TeamNum == TP1->TeamNum) return S->P1;
+    if (TPS && TP2 && TPS->TeamNum > 0 && TPS->TeamNum == TP2->TeamNum) return S->P2;
+
+    // 3) Couldn’t resolve — returns nullptr so callers can early‑out safely.
+    return nullptr;
+}
+
 void AMatchGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
     Super::GetLifetimeReplicatedProps(OutLifetimeProps);
@@ -66,6 +91,16 @@ void AMatchGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutL
     DOREPLIFETIME(AMatchGameState, Preview);
     DOREPLIFETIME(AMatchGameState, ActionPreview);
     
+}
+
+void AMatchGameState::BeginPlay()
+{
+    Super::BeginPlay();
+    TArray<AActor*> Found;
+    UGameplayStatics::GetAllActorsOfClass(GetWorld(), AObjectiveMarker::StaticClass(), Found);
+    Objectives.Reserve(Found.Num());
+    for (AActor* A : Found)
+        if (auto* M = Cast<AObjectiveMarker>(A)) Objectives.Add(M);
 }
 
 void AMatchGameState::Multicast_DrawShotDebug_Implementation(const FVector& WorldLoc,
@@ -840,6 +875,10 @@ void AMatchGameMode::HandleEndPhase(APlayerController* PC)
     S->CurrentRound = FMath::Clamp<uint8>(S->CurrentRound + 1, 1, S->MaxRounds);
     S->TurnInRound  = 0;
 
+    ScoreObjectivesForRound();
+    S->OnDeploymentChanged.Broadcast();
+    S->ForceNetUpdate();
+
     if (S->CurrentRound > S->MaxRounds)
     {
         S->Phase = EMatchPhase::EndGame;
@@ -854,6 +893,36 @@ void AMatchGameMode::HandleEndPhase(APlayerController* PC)
     Broadcast();
 }
 
+void AMatchGameMode::ScoreObjectivesForRound()
+{
+    if (!HasAuthority()) return;
+    AMatchGameState* S = GS();
+    if (!S) return;
+
+    int32 P1Delta = 0, P2Delta = 0;
+
+    // If you cached objectives on GS, iterate those; otherwise iterate world
+    TArray<AObjectiveMarker*> Objectives;
+    for (TActorIterator<AObjectiveMarker> It(GetWorld()); It; ++It)
+        Objectives.Add(*It);
+
+    for (AObjectiveMarker* Obj : Objectives)
+    {
+        if (!Obj) continue;
+
+        // Recompute from current unit positions (server)
+        Obj->RecalculateControl();
+
+        APlayerState* Controller = Obj->GetControllingPlayerState();
+        if (!Controller) continue;
+
+        if (Controller == S->P1) P1Delta += Obj->PointsPerRound;
+        else if (Controller == S->P2) P2Delta += Obj->PointsPerRound;
+    }
+
+    S->ScoreP1 += P1Delta;
+    S->ScoreP2 += P2Delta;
+}
 
 
 void AMatchGameMode::FinalizePlayerJoin(APlayerController* PC)
@@ -898,3 +967,44 @@ void AMatchGameMode::FinalizePlayerJoin(APlayerController* PC)
     }
 }
 
+void AMatchGameMode::TallyObjectives_EndOfRound()
+{
+    AMatchGameState* GS = GetGameState<AMatchGameState>();
+    if (!GS) return;
+
+    int32 RoundP1 = 0, RoundP2 = 0;
+
+    for (AObjectiveMarker* Obj : GS->Objectives)
+    {
+        if (!Obj) continue;
+
+        int32 OC_P1 = 0, OC_P2 = 0;
+
+        for (TActorIterator<AUnitBase> It(GetWorld()); It; ++It)
+        {
+            AUnitBase* U = *It;
+            if (!U || !U->OwningPS) continue; // use whatever you already store for ownership
+
+            const int32 OC = U->GetObjectiveControlAt(Obj);
+            if (OC <= 0) continue;
+
+            if (U->OwningPS == GS->P1) OC_P1 += OC;
+            else if (U->OwningPS == GS->P2) OC_P2 += OC;
+        }
+
+        if (OC_P1 > OC_P2) RoundP1 += Obj->PointsPerRound;
+        else if (OC_P2 > OC_P1) RoundP2 += Obj->PointsPerRound;
+
+#if !(UE_BUILD_SHIPPING)
+        UE_LOG(LogTemp, Log, TEXT("[OBJ %s] P1=%d  P2=%d  -> %s"),
+            *Obj->ObjectiveId.ToString(), OC_P1, OC_P2,
+            OC_P1>OC_P2?TEXT("P1"):OC_P2>OC_P1?TEXT("P2"):TEXT("Contested/None"));
+#endif
+    }
+
+    GS->ScoreP1 += RoundP1;
+    GS->ScoreP2 += RoundP2;
+
+    // You already broadcast UI updates; reuse your existing multicast
+    GS->OnDeploymentChanged.Broadcast();
+}
