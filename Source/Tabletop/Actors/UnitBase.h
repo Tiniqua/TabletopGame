@@ -37,11 +37,23 @@ public:
     // ---------- Replicated stat snapshot (so clients don’t need to DT lookup) ----------
     UPROPERTY(Replicated) int32 ToughnessRep = 0;
     UPROPERTY(Replicated) int32 WoundsRep    = 0;
+    UPROPERTY(Replicated) int32 SaveRep      = 5;
 
     UPROPERTY(Replicated) int32 WeaponRangeInchesRep = 0;
     UPROPERTY(Replicated) int32 WeaponAttacksRep     = 0;
     UPROPERTY(Replicated) int32 WeaponDamageRep      = 0;
+    UPROPERTY(Replicated) int32 WeaponSkillToHitRep  = 4;
+    UPROPERTY(Replicated) int32 WeaponStrengthRep    = 4;
+    UPROPERTY(Replicated) int32 WeaponAPRep          = 0;
 
+    UPROPERTY(ReplicatedUsing=OnRep_Health) int32 WoundsPool = 0;
+
+    int32 GetSave() const { return SaveRep; }
+
+    void ApplyDamage_Server(int32 Damage);
+
+    UFUNCTION() void OnRep_Health();
+    
     // Init from spawn params (server only)
     void Server_InitFromRow(APlayerState* OwnerPS, const FUnitRow& Row, int32 InWeaponIndex);
 

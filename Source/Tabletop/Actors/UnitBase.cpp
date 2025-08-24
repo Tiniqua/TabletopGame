@@ -43,33 +43,39 @@ void AUnitBase::Server_InitFromRow(APlayerState* OwnerPS, const FUnitRow& Row, i
     OwningPS = OwnerPS;
     UnitId   = Row.UnitId;
 
-    // Derive faction from owner PS if available
     if (const ATabletopPlayerState* TPS = Cast<ATabletopPlayerState>(OwnerPS))
     {
         Faction = TPS->SelectedFaction;
     }
 
-    // Fixed model count if present; else fall back to MinModels
-    const int32 FixedModels = Row.Models;
-    ModelsMax     = FixedModels;
+    ModelsMax     = Row.Models;
     ModelsCurrent = ModelsMax;
+
+    // Core stats snapshot
+    ToughnessRep = Row.Toughness;
+    WoundsRep    = Row.Wounds;
+    SaveRep      = Row.Save;        // NEW
+
+    // Wounds pool (models * wounds each)
+    WoundsPool = ModelsMax * FMath::Max(1, WoundsRep); // NEW
 
     // Movement
     MoveMaxInches    = (float)Row.MoveInches;
-    MoveBudgetInches = 0.f; // will be reset at start of the owner's Move phase
+    MoveBudgetInches = 0.f;
 
-    // Core stats snapshot (replicate so clients don’t need lookups)
-    ToughnessRep = Row.Toughness;
-    WoundsRep    = Row.Wounds;
-
-    // Weapon selection & snapshot
+    // Weapon snapshot
     if (Row.Weapons.Num() > 0)
     {
         WeaponIndex = FMath::Clamp(InWeaponIndex, 0, Row.Weapons.Num() - 1);
         const FWeaponProfile& W = Row.Weapons[WeaponIndex];
+
         WeaponRangeInchesRep = W.RangeInches;
         WeaponAttacksRep     = W.Attacks;
         WeaponDamageRep      = W.Damage;
+
+        WeaponSkillToHitRep  = W.SkillToHit;   // NEW
+        WeaponStrengthRep    = W.Strength;     // NEW
+        WeaponAPRep          = W.AP;           // NEW
     }
     else
     {
@@ -77,12 +83,64 @@ void AUnitBase::Server_InitFromRow(APlayerState* OwnerPS, const FUnitRow& Row, i
         WeaponRangeInchesRep = 0;
         WeaponAttacksRep     = 0;
         WeaponDamageRep      = 0;
+
+        WeaponSkillToHitRep  = 6;
+        WeaponStrengthRep    = 3;
+        WeaponAPRep          = 0;
     }
 
-    // Build initial formation on server
     RebuildFormation();
+    ForceNetUpdate();
+}
+
+void AUnitBase::ApplyDamage_Server(int32 Damage)
+{
+    if (!HasAuthority() || Damage <= 0) return;
+
+    WoundsPool = FMath::Max(0, WoundsPool - Damage);
+
+    // Ceil division to compute how many models still stand
+    const int32 PerModel = FMath::Max(1, WoundsRep);
+    int32 NewModels = (WoundsPool + PerModel - 1) / PerModel;
+    NewModels = FMath::Clamp(NewModels, 0, ModelsMax);
+
+    if (NewModels != ModelsCurrent)
+    {
+        ModelsCurrent = NewModels;
+        RebuildFormation();
+    }
+
+    if (WoundsPool <= 0)
+    {
+        Destroy(); // replicated destroy
+        return;
+    }
 
     ForceNetUpdate();
+}
+
+void AUnitBase::OnDamaged(int32 ModelsLost, int32 /*WoundsOverflow*/)
+{
+    if (!HasAuthority()) return;
+
+    ModelsCurrent = FMath::Clamp(ModelsCurrent - FMath::Max(0, ModelsLost), 0, ModelsMax);
+    
+    RebuildFormation();
+    ForceNetUpdate();
+}
+
+void AUnitBase::OnRep_Health()
+{
+    // Recompute ModelsCurrent from WoundsPool on clients and rebuild
+    const int32 PerModel = FMath::Max(1, WoundsRep);
+    int32 NewModels = (WoundsPool + PerModel - 1) / PerModel;
+    NewModels = FMath::Clamp(NewModels, 0, ModelsMax);
+
+    if (NewModels != ModelsCurrent)
+    {
+        ModelsCurrent = NewModels;
+    }
+    RebuildFormation();
 }
 
 /** Simple highlight toggle (uses CustomDepth on all model meshes) */
@@ -111,16 +169,7 @@ void AUnitBase::OnDeselected()
     SetHighlighted(false);
 }
 
-/** Apply casualties (server) */
-void AUnitBase::OnDamaged(int32 ModelsLost, int32 /*WoundsOverflow*/)
-{
-    if (!HasAuthority()) return;
 
-    ModelsCurrent = FMath::Clamp(ModelsCurrent - FMath::Max(0, ModelsLost), 0, ModelsMax);
-    
-    RebuildFormation();  // server updates; clients will update via OnRep_Models
-    ForceNetUpdate();
-}
 
 /** RepNotify: models changed → rebuild local formation */
 void AUnitBase::OnRep_Models()
@@ -218,4 +267,10 @@ void AUnitBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetim
     DOREPLIFETIME(AUnitBase, WeaponRangeInchesRep);
     DOREPLIFETIME(AUnitBase, WeaponAttacksRep);
     DOREPLIFETIME(AUnitBase, WeaponDamageRep);
+
+    DOREPLIFETIME(AUnitBase, SaveRep);
+    DOREPLIFETIME(AUnitBase, WeaponSkillToHitRep);
+    DOREPLIFETIME(AUnitBase, WeaponStrengthRep);
+    DOREPLIFETIME(AUnitBase, WeaponAPRep);
+    DOREPLIFETIME(AUnitBase, WoundsPool);
 }

@@ -19,6 +19,29 @@ namespace
     constexpr float BaseToBaseGapCm = 50.f; // ~19.7 inches if using big base; adjust as needed
 }
 
+namespace
+{
+    FORCEINLINE int32 D6() { return FMath::RandRange(1, 6); }
+
+    // 40k to-wound threshold from S vs T
+    FORCEINLINE int32 ToWoundTarget(int32 S, int32 T)
+    {
+        if (S >= 2*T)     return 2;
+        if (S >  T)       return 3;
+        if (S == T)       return 4;
+        if (2*S <= T)     return 6;
+        /* S < T */       return 5;
+    }
+
+    // 40k: worsen the save by AP (AP 0→no change, AP 2 → +2 to needed roll)
+    // clamp to [2..7]; 7 means "no save" (auto-fail)
+    FORCEINLINE int32 ModifiedSaveNeed(int32 BaseSave, int32 AP)
+    {
+        int32 Need = BaseSave + FMath::Max(0, AP);
+        Need = FMath::Clamp(Need, 2, 7);
+        return Need;
+    }
+}
 
 void AMatchGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
@@ -211,17 +234,61 @@ void AMatchGameMode::Handle_ConfirmShoot(AMatchPlayerController* PC, AUnitBase* 
     if (!S || S->Phase != EMatchPhase::Battle || S->TurnPhase != ETurnPhase::Shoot) return;
     if (PC->PlayerState != S->CurrentTurn) return;
     if (Attacker->OwningPS != PC->PlayerState) return;
-
-    // Re-validate at confirm time
     if (!ValidateShoot(Attacker, Target)) return;
 
-    // --- Minimal resolution stub ---
-    // TODO: replace with proper to-hit / wound / save. For now, remove 1 model.
-    const int32 ModelsLost = 1;
-    Target->ModelsCurrent = FMath::Max(0, Target->ModelsCurrent - ModelsLost);
-    Attacker->bHasShot = true;
+    // Snapshot needed stats (already replicated/snapshotted on the unit)
+    const int32 Models    = FMath::Max(0, Attacker->ModelsCurrent);
+    const int32 AttacksPM = FMath::Max(0, Attacker->GetAttacks());
+    const int32 TotalAtk  = Models * AttacksPM;
 
-    // Clear preview
+    const int32 HitNeed   = FMath::Clamp(Attacker->WeaponSkillToHitRep, 2, 6);
+    const int32 Sval      = Attacker->WeaponStrengthRep;
+    const int32 Dmg       = FMath::Max(1, Attacker->WeaponDamageRep);
+    const int32 AP        = FMath::Max(0, Attacker->WeaponAPRep);
+
+    const int32 Tval      = Target->GetToughness();
+    const int32 SaveBase  = Target->GetSave();
+    const int32 SaveNeed  = ModifiedSaveNeed(SaveBase, AP);
+    const bool  bHasSave  = (SaveNeed <= 6); // 7+ is "no save"
+
+    // Roll!
+    int32 hits = 0;
+    for (int i=0; i<TotalAtk; ++i)
+        if (D6() >= HitNeed) ++hits;
+
+    const int32 WoundNeed = ToWoundTarget(Sval, Tval);
+
+    int32 wounds = 0;
+    for (int i=0; i<hits; ++i)
+        if (D6() >= WoundNeed) ++wounds;
+
+    int32 unsaved = 0;
+    if (bHasSave)
+    {
+        for (int i=0; i<wounds; ++i)
+            if (D6() < SaveNeed) ++unsaved; // fail = unsaved
+    }
+    else
+    {
+        unsaved = wounds; // no save allowed
+    }
+
+    const int32 totalDamage = unsaved * Dmg;
+
+    // Apply effects
+    Attacker->bHasShot = true;
+    Attacker->ForceNetUpdate();
+
+    if (totalDamage > 0)
+    {
+        Target->ApplyDamage_Server(totalDamage); // this may Destroy() if wiped
+    }
+    else
+    {
+        Target->ForceNetUpdate(); // still tell clients preview cleared
+    }
+
+    // Clear preview if it was pointing here
     if (S->Preview.Attacker == Attacker)
     {
         S->Preview.Attacker = nullptr;
@@ -229,11 +296,10 @@ void AMatchGameMode::Handle_ConfirmShoot(AMatchPlayerController* PC, AUnitBase* 
         S->Preview.Phase    = S->TurnPhase;
     }
 
-    Attacker->ForceNetUpdate();
-    Target->ForceNetUpdate();
     S->OnDeploymentChanged.Broadcast();
     S->ForceNetUpdate();
 }
+
 
 void AMatchGameMode::Handle_CancelPreview(AMatchPlayerController* PC, AUnitBase* Attacker)
 {
