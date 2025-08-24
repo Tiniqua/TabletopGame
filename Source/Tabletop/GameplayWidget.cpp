@@ -81,11 +81,9 @@ void UGameplayWidget::RefreshTopBar()
     {
         switch (P)
         {
-        case ETurnPhase::Move:   return TEXT("Movement");
-        case ETurnPhase::Shoot:  return TEXT("Shooting");
-        case ETurnPhase::Charge: return TEXT("Charge");
-        case ETurnPhase::Fight:  return TEXT("Fight");
-        default:                 return TEXT("");
+        case ETurnPhase::Move:  return TEXT("Movement");
+        case ETurnPhase::Shoot: return TEXT("Shooting");
+        default:                return TEXT("");
         }
     };
 
@@ -101,10 +99,11 @@ void UGameplayWidget::RefreshBottom()
     if (!S || !OPC || !OPC->PlayerState) return;
 
     const bool bMyTurn = (S->CurrentTurn == OPC->PlayerState);
-    const bool bIsFight = (S->TurnPhase == ETurnPhase::Fight);
+    const bool bIsLastPhase = (S->TurnPhase == ETurnPhase::Shoot);
 
-    if (NextBtn)       NextBtn->SetIsEnabled(bMyTurn && S->Phase == EMatchPhase::Battle);
-    if (NextBtnLabel)  NextBtnLabel->SetText(FText::FromString(bIsFight ? TEXT("End Turn") : TEXT("Next Phase")));
+    if (NextBtn)      NextBtn->SetIsEnabled(bMyTurn && S->Phase == EMatchPhase::Battle);
+    if (NextBtnLabel) NextBtnLabel->SetText(FText::FromString(bIsLastPhase ? TEXT("End Turn") : TEXT("Next Phase")));
+
 
     // (Context panel content comes later; for now we only wire the button)
 }

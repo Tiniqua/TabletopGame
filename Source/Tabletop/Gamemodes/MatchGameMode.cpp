@@ -68,8 +68,6 @@ void AMatchGameMode::ResetTurnFor(APlayerState* PS)
         {
             It->MoveBudgetInches = It->MoveMaxInches;
             It->bHasShot = false;
-            It->bChargeAttempted = false;
-            // It->bEngaged stays true/false based on melee state
             It->ForceNetUpdate();
         }
     }
@@ -231,13 +229,6 @@ void AMatchGameMode::Handle_ConfirmShoot(AMatchPlayerController* PC, AUnitBase* 
         S->Preview.Phase    = S->TurnPhase;
     }
 
-    // Disengage if wiped; additional logic can go here
-    if (Target->ModelsCurrent <= 0)
-    {
-        Target->bEngaged = false;
-        // (Optional) Destroy actor or leave carcass; up to you
-    }
-
     Attacker->ForceNetUpdate();
     Target->ForceNetUpdate();
     S->OnDeploymentChanged.Broadcast();
@@ -266,88 +257,6 @@ void AMatchGameMode::Handle_CancelPreview(AMatchPlayerController* PC, AUnitBase*
         S->ForceNetUpdate();
     }
 }
-
-
-bool AMatchGameMode::ValidateCharge(AUnitBase* A, AUnitBase* T) const
-{
-    if (!A || !T) return false;
-    if (A->OwningPS == T->OwningPS) return false;
-    if (A->ModelsCurrent <= 0 || T->ModelsCurrent <= 0) return false;
-    if (A->bChargeAttempted) return false;
-
-    constexpr float ChargeRangeTT = 12.f; // tabletop inches
-    const float distTT = FVector::Dist(A->GetActorLocation(), T->GetActorLocation()) / CmPerTabletopInch();
-    return distTT <= ChargeRangeTT;
-}
-
-void AMatchGameMode::Handle_AttemptCharge(AMatchPlayerController* PC, AUnitBase* Attacker, AUnitBase* Target)
-{
-    if (!HasAuthority() || !PC || !Attacker || !Target) return;
-
-    AMatchGameState* S = GS();
-    if (!S || S->Phase != EMatchPhase::Battle || S->TurnPhase != ETurnPhase::Charge) return;
-    if (PC->PlayerState != S->CurrentTurn) return;
-    if (Attacker->OwningPS != PC->PlayerState) return;
-
-    const bool bValid = ValidateCharge(Attacker, Target);
-    Attacker->bChargeAttempted = true;
-
-    if (bValid)
-    {
-        // Move to base-to-base (simple straight-line approach with a gap)
-        const FVector ToTarget = Target->GetActorLocation() - Attacker->GetActorLocation();
-        const FVector Dir      = ToTarget.GetSafeNormal();
-        const FVector Dest     = Target->GetActorLocation() - Dir * BaseToBaseGapCm;
-
-        Attacker->SetActorLocation(Dest, /*bSweep=*/false, /*OutHit=*/nullptr, ETeleportType::TeleportPhysics);
-        Attacker->bEngaged = true;
-        Target->bEngaged   = true;
-    }
-
-    Attacker->ForceNetUpdate();
-    Target->ForceNetUpdate();
-    S->OnDeploymentChanged.Broadcast();
-    S->ForceNetUpdate();
-}
-
-bool AMatchGameMode::ValidateFight(AUnitBase* A, AUnitBase* T) const
-{
-    if (!A || !T) return false;
-    if (A->OwningPS == T->OwningPS) return false;
-    if (A->ModelsCurrent <= 0 || T->ModelsCurrent <= 0) return false;
-
-    const float distTT = FVector::Dist(A->GetActorLocation(), T->GetActorLocation()) / CmPerTabletopInch();
-    const bool bInMelee = (distTT <= 2.f) || (A->bEngaged && T->bEngaged);
-    return bInMelee;
-}
-
-void AMatchGameMode::Handle_Fight(AMatchPlayerController* PC, AUnitBase* Attacker, AUnitBase* Target)
-{
-    if (!HasAuthority() || !PC || !Attacker || !Target) return;
-
-    AMatchGameState* S = GS();
-    if (!S || S->Phase != EMatchPhase::Battle || S->TurnPhase != ETurnPhase::Fight) return;
-    if (PC->PlayerState != S->CurrentTurn) return;
-    if (Attacker->OwningPS != PC->PlayerState) return;
-
-    if (!ValidateFight(Attacker, Target)) return;
-
-    // --- Minimal resolution stub ---
-    // TODO: replace with proper melee math; remove 1 model for now.
-    Target->ModelsCurrent = FMath::Max(0, Target->ModelsCurrent - 1);
-
-    if (Target->ModelsCurrent <= 0)
-    {
-        Target->bEngaged = false;
-        Attacker->bEngaged = false;
-    }
-
-    Attacker->ForceNetUpdate();
-    Target->ForceNetUpdate();
-    S->OnDeploymentChanged.Broadcast();
-    S->ForceNetUpdate();
-}
-
 
 void AMatchGameMode::BeginPlay()
 {
@@ -384,29 +293,10 @@ void AMatchGameMode::ResetUnitRoundStateFor(APlayerState* TurnOwner)
             {
                 // Movement
                 U->MoveBudgetInches = U->MoveMaxInches;
-
                 // Actions
                 U->bHasShot         = false;
-                U->bChargeAttempted = false;
-
-                // NOTE: Intentionally leaving U->bEngaged as-is.
-                // If you want to clear engagement each round, uncomment:
-                // U->bEngaged = false;
 
                 U->ForceNetUpdate();
-
-#if !(UE_BUILD_SHIPPING)
-                if (GEngine)
-                {
-                    GEngine->AddOnScreenDebugMessage(
-                        -1, 5.f, FColor::Cyan,
-                        FString::Printf(TEXT("[RoundReset] %s  Move=%.1f\"/%.1f\"  Shot=%s  Charge=%s"),
-                            *U->GetName(),
-                            U->MoveBudgetInches, U->MoveMaxInches,
-                            U->bHasShot ? TEXT("Used") : TEXT("Ready"),
-                            U->bChargeAttempted ? TEXT("Used") : TEXT("Ready")));
-                }
-#endif
             }
         }
     }
@@ -651,9 +541,7 @@ void AMatchGameMode::HandleEndPhase(APlayerController* PC)
     if (!HasAuthority() || !PC) return;
     AMatchGameState* S = GS();
     if (!S || S->Phase != EMatchPhase::Battle) return;
-
-    // Only the active player may advance
-    if (PC->PlayerState != S->CurrentTurn) return;
+    if (PC->PlayerState != S->CurrentTurn) return; // only active player may advance
 
     auto Broadcast = [&]()
     {
@@ -661,53 +549,44 @@ void AMatchGameMode::HandleEndPhase(APlayerController* PC)
         S->ForceNetUpdate();
     };
 
-    // Phase step
-    if (S->TurnPhase != ETurnPhase::Fight)
+    // Move -> Shoot -> (end turn)
+    if (S->TurnPhase == ETurnPhase::Move)
     {
-        // Move -> Shoot -> Charge -> Fight
-        switch (S->TurnPhase)
-        {
-        case ETurnPhase::Move:   S->TurnPhase = ETurnPhase::Shoot;  break;
-        case ETurnPhase::Shoot:  S->TurnPhase = ETurnPhase::Charge; break;
-        case ETurnPhase::Charge: S->TurnPhase = ETurnPhase::Fight;  break;
-        default: break;
-        }
+        S->TurnPhase = ETurnPhase::Shoot;
         Broadcast();
         return;
     }
 
-    // End of Fight -> end of this player's turn
+    // End of Shoot -> end of this player's turn
+    // If first player in round just ended, switch to other player.
     if (S->TurnInRound == 0)
     {
-        // Switch to other player, start at Move
         S->TurnInRound = 1;
         S->CurrentTurn = OtherPlayer(S->CurrentTurn);
         S->TurnPhase   = ETurnPhase::Move;
-        if (AMatchGameMode* GM = GetWorld()->GetAuthGameMode<AMatchGameMode>())
-            GM->ResetUnitRoundStateFor(S->CurrentTurn);
+        ResetUnitRoundStateFor(S->CurrentTurn);
         Broadcast();
+        return;
     }
-    else
+
+    // Second player ended → next round, or end game
+    S->CurrentRound = FMath::Clamp<uint8>(S->CurrentRound + 1, 1, S->MaxRounds);
+    S->TurnInRound  = 0;
+
+    if (S->CurrentRound > S->MaxRounds)
     {
-        // Finished both turns in this round
-        S->CurrentRound = FMath::Clamp<uint8>(S->CurrentRound + 1, 1, S->MaxRounds);
-        S->TurnInRound  = 0;
-
-        if (S->CurrentRound > S->MaxRounds)
-        {
-            S->Phase = EMatchPhase::EndGame;
-            Broadcast();
-            return;
-        }
-
-        // Next round starts with the other player than who just ended
-        S->CurrentTurn = OtherPlayer(S->CurrentTurn);
-        S->TurnPhase   = ETurnPhase::Move;
-        if (AMatchGameMode* GM = GetWorld()->GetAuthGameMode<AMatchGameMode>())
-            GM->ResetUnitRoundStateFor(S->CurrentTurn);
+        S->Phase = EMatchPhase::EndGame;
         Broadcast();
+        return;
     }
+
+    // Next round starts with the other player than who just ended
+    S->CurrentTurn = OtherPlayer(S->CurrentTurn);
+    S->TurnPhase   = ETurnPhase::Move;
+    ResetUnitRoundStateFor(S->CurrentTurn);
+    Broadcast();
 }
+
 
 
 void AMatchGameMode::FinalizePlayerJoin(APlayerController* PC)

@@ -68,10 +68,6 @@ public:
 	void Server_CancelPreview(AUnitBase* Attacker);
 	UFUNCTION(Server, Reliable)
 	void Server_ConfirmShoot(AUnitBase* Attacker, AUnitBase* Target);
-	UFUNCTION(Server, Reliable)
-	void Server_AttemptCharge(AUnitBase* Attacker, AUnitBase* Target);
-	UFUNCTION(Server, Reliable)
-	void Server_Fight(AUnitBase* Attacker, AUnitBase* Target);
 
 	/** Class reference to the deployment widget */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="UI")

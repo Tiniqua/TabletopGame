@@ -88,13 +88,52 @@ void UTurnContextWidget::Refresh()
 
     switch (S->TurnPhase)
     {
-        case ETurnPhase::Move:   ShowMovement(Sel);      break;
-        case ETurnPhase::Shoot:
-        case ETurnPhase::Charge:
-        case ETurnPhase::Fight:  ShowActionPhases(Sel);  break;
-        default:                 ShowBlank();            break;
+    case ETurnPhase::Move:  ShowMovement(Sel);   break;
+    case ETurnPhase::Shoot: ShowShootPhase(Sel); break;
+    default:                ShowBlank();         break;
     }
 }
+
+void UTurnContextWidget::ShowShootPhase(AUnitBase* Sel)
+{
+    if (PhaseSwitcher) PhaseSwitcher->SetActiveWidget(ActionPanel);
+
+    AMatchGameState* S = GS();
+    AMatchPlayerController* P = MPC();
+    if (!S || !P) return;
+
+    const bool bMyTurn = IsMyTurn();
+    const bool bMine   = bMyTurn && Sel && Sel->OwningPS == P->PlayerState && Sel->ModelsCurrent > 0;
+
+    FillAttacker(Sel);
+    ClearTargetFields();
+
+    auto SetPrimary = [&](const TCHAR* Label, bool bEnable)
+    {
+        if (PrimaryActionLabel) PrimaryActionLabel->SetText(FText::FromString(Label));
+        if (PrimaryActionBtn)   PrimaryActionBtn->SetIsEnabled(bEnable);
+    };
+
+    // defaults
+    if (SelectTargetBtn)  SelectTargetBtn->SetIsEnabled(false);
+    if (CancelBtn)        CancelBtn->SetIsEnabled(false);
+    SetPrimary(TEXT(""), false);
+
+    const bool bPreviewForMe =
+        (S->TurnPhase == ETurnPhase::Shoot) &&
+        (S->Preview.Attacker == Sel) &&
+        (S->Preview.Target   != nullptr);
+
+    if (bPreviewForMe)
+        FillTarget(S->Preview.Target);
+
+    // --- Shoot only ---
+    const bool bCanShoot = bMine && Sel && !Sel->bHasShot;
+    if (SelectTargetBtn) SelectTargetBtn->SetIsEnabled(bCanShoot && !bPreviewForMe);
+    SetPrimary(TEXT("Confirm"), bCanShoot && bPreviewForMe);
+    if (CancelBtn)       CancelBtn->SetIsEnabled(bMine && (P->bTargetMode || bPreviewForMe));
+}
+
 
 void UTurnContextWidget::ShowBlank()
 {
@@ -144,70 +183,7 @@ void UTurnContextWidget::ShowMovement(AUnitBase* Sel)
     (void)bEnable;
 }
 
-void UTurnContextWidget::ShowActionPhases(AUnitBase* Sel)
-{
-    if (PhaseSwitcher) PhaseSwitcher->SetActiveWidget(ActionPanel);
 
-    AMatchGameState* S = GS();
-    AMatchPlayerController* P = MPC();
-    if (!S || !P) return;
-
-    const bool bMyTurn = IsMyTurn();
-    const bool bMine   = bMyTurn && Sel && Sel->OwningPS == P->PlayerState && Sel->ModelsCurrent > 0;
-
-    FillAttacker(Sel);
-    ClearTargetFields();
-
-    auto SetPrimary = [&](const TCHAR* Label, bool bEnable)
-    {
-        if (PrimaryActionLabel) PrimaryActionLabel->SetText(FText::FromString(Label));
-        if (PrimaryActionBtn)   PrimaryActionBtn->SetIsEnabled(bEnable);
-    };
-
-    // defaults
-    if (SelectTargetBtn)  SelectTargetBtn->SetIsEnabled(false);
-    if (CancelBtn)        CancelBtn->SetIsEnabled(false);
-    SetPrimary(TEXT(""), false);
-
-    const bool bPreviewForMe =
-    (S->TurnPhase == ETurnPhase::Shoot) &&
-    (S->Preview.Attacker == Sel) &&
-    (S->Preview.Target   != nullptr);
-
-    if (bPreviewForMe)
-        FillTarget(S->Preview.Target);
-
-    switch (S->TurnPhase)
-    {
-    case ETurnPhase::Shoot:
-    {
-        const bool bCanShoot = bMine && Sel && !Sel->bHasShot;
-        if (SelectTargetBtn) SelectTargetBtn->SetIsEnabled(bCanShoot && !bPreviewForMe);
-        SetPrimary(TEXT("Confirm"), bCanShoot && bPreviewForMe);
-        if (CancelBtn)       CancelBtn->SetIsEnabled(bMine && (P->bTargetMode || bPreviewForMe));
-        break;
-    }
-    case ETurnPhase::Charge:
-    {
-        const bool bCanTryCharge = bMine && Sel && !Sel->bChargeAttempted;
-        if (SelectTargetBtn) SelectTargetBtn->SetIsEnabled(bCanTryCharge && !bPreviewForMe);
-        SetPrimary(TEXT("Attempt Charge"), bCanTryCharge && bPreviewForMe);
-        if (CancelBtn)       CancelBtn->SetIsEnabled(bMine && (P->bTargetMode || bPreviewForMe));
-        break;
-    }
-    case ETurnPhase::Fight:
-    {
-        const bool bArmed = bMine && Sel && Sel->ModelsCurrent > 0;
-        if (SelectTargetBtn) SelectTargetBtn->SetIsEnabled(bArmed && !bPreviewForMe);
-        // Require a preview to know which enemy to fight (simplest, server validates anyway)
-        SetPrimary(TEXT("Fight"), bArmed && bPreviewForMe);
-        if (CancelBtn)       CancelBtn->SetIsEnabled(bMine && (P->bTargetMode || bPreviewForMe));
-        break;
-    }
-    default:
-        break;
-    }
-}
 
 void UTurnContextWidget::FillAttacker(AUnitBase* U)
 {
@@ -281,26 +257,14 @@ void UTurnContextWidget::OnPrimaryActionClicked()
     AMatchPlayerController* P = MPC();
     if (!S || !P || !P->SelectedUnit) return;
 
-    switch (S->TurnPhase)
+    if (S->TurnPhase == ETurnPhase::Shoot)
     {
-        case ETurnPhase::Shoot:
-            if (S->Preview.Attacker == P->SelectedUnit && S->Preview.Target)
-                P->Server_ConfirmShoot(P->SelectedUnit, S->Preview.Target);
-            break;
-
-        case ETurnPhase::Charge:
-            if (S->Preview.Attacker == P->SelectedUnit && S->Preview.Target)
-                P->Server_AttemptCharge(P->SelectedUnit, S->Preview.Target);
-            break;
-
-        case ETurnPhase::Fight:
-            if (S->Preview.Attacker == P->SelectedUnit && S->Preview.Target)
-                P->Server_Fight(P->SelectedUnit, S->Preview.Target);
-            break;
-
-        default:
-            break;
+        if (S->Preview.Attacker == P->SelectedUnit && S->Preview.Target)
+        {
+            P->Server_ConfirmShoot(P->SelectedUnit, S->Preview.Target);
+        }
     }
 
     P->ExitTargetMode();
 }
+

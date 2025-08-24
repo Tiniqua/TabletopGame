@@ -25,9 +25,7 @@ UENUM(BlueprintType)
 enum class ETurnPhase : uint8
 {
 	Move,
-	Shoot,
-	Charge,
-	Fight
+	Shoot
 };
 
 USTRUCT()
@@ -36,7 +34,7 @@ struct FCombatPreview
 	GENERATED_BODY()
 	UPROPERTY() AUnitBase* Attacker = nullptr;
 	UPROPERTY() AUnitBase* Target   = nullptr;
-	UPROPERTY() ETurnPhase Phase    = ETurnPhase::Move; // usually Shoot/Charge/Fight
+	UPROPERTY() ETurnPhase Phase    = ETurnPhase::Move;
 };
 
 // ignore bad dupe im lazy
@@ -134,14 +132,7 @@ public:
 	
 	// Cancels any active GS->Preview if this PC owns the Attacker and it's their turn
 	void Handle_CancelPreview(class AMatchPlayerController* PC, class AUnitBase* Attacker);
-
-
-	// Charge & fight (stubs now)
-	bool ValidateCharge(AUnitBase* Attacker, AUnitBase* Target) const;
-	void Handle_AttemptCharge(AMatchPlayerController* PC, AUnitBase* Attacker, AUnitBase* Target);
-	bool ValidateFight(AUnitBase* Attacker, AUnitBase* Target) const;
-	void Handle_Fight(AMatchPlayerController* PC, AUnitBase* Attacker, AUnitBase* Target);
-
+	
 	// Per-turn reset (call when starting Move for CurrentTurn)
 	void ResetTurnFor(APlayerState* PS);
 	

@@ -117,13 +117,7 @@ void AUnitBase::OnDamaged(int32 ModelsLost, int32 /*WoundsOverflow*/)
     if (!HasAuthority()) return;
 
     ModelsCurrent = FMath::Clamp(ModelsCurrent - FMath::Max(0, ModelsLost), 0, ModelsMax);
-
-    // If wiped, clear engagement; other rules can be added here
-    if (ModelsCurrent <= 0)
-    {
-        bEngaged = false;
-    }
-
+    
     RebuildFormation();  // server updates; clients will update via OnRep_Models
     ForceNetUpdate();
 }
@@ -218,9 +212,6 @@ void AUnitBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetim
     DOREPLIFETIME(AUnitBase, MoveMaxInches);
 
     DOREPLIFETIME(AUnitBase, bHasShot);
-    DOREPLIFETIME(AUnitBase, bChargeAttempted);
-    DOREPLIFETIME(AUnitBase, bEngaged);
-
     DOREPLIFETIME(AUnitBase, ToughnessRep);
     DOREPLIFETIME(AUnitBase, WoundsRep);
 

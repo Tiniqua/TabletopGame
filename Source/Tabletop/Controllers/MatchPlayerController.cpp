@@ -178,51 +178,6 @@ void AMatchPlayerController::OnLeftClick()
         }
         break;
     }
-
-    case ETurnPhase::Charge:
-    {
-        // Same “select target” flow as shooting; Confirm will attempt the charge
-        if (bTargetMode && SelectedUnit && SelectedUnit->OwningPS == PlayerState)
-        {
-            if (AUnitBase* Target = TraceUnit())
-            {
-                if (Target->OwningPS != PlayerState)
-                {
-                    Server_SelectTarget(SelectedUnit, Target); // sets replicated preview
-                }
-            }
-            return;
-        }
-        if (AUnitBase* U = TraceUnit())
-        {
-            if (U->OwningPS == PlayerState)
-                SelectUnit(U);
-        }
-        break;
-    }
-
-    case ETurnPhase::Fight:
-    {
-        // Target mode: pick enemy in melee, Confirm will call Server_Fight
-        if (bTargetMode && SelectedUnit && SelectedUnit->OwningPS == PlayerState)
-        {
-            if (AUnitBase* Target = TraceUnit())
-            {
-                if (Target->OwningPS != PlayerState)
-                {
-                    Server_SelectTarget(SelectedUnit, Target);
-                }
-            }
-            return;
-        }
-        if (AUnitBase* U = TraceUnit())
-        {
-            if (U->OwningPS == PlayerState)
-                SelectUnit(U);
-        }
-        break;
-    }
-
     default: break;
     }
 }
@@ -430,18 +385,6 @@ void AMatchPlayerController::Server_ConfirmShoot_Implementation(AUnitBase* Attac
 {
 	if (AMatchGameMode* GM = GetWorld()->GetAuthGameMode<AMatchGameMode>())
 		GM->Handle_ConfirmShoot(this, Attacker, Target);
-}
-
-void AMatchPlayerController::Server_AttemptCharge_Implementation(AUnitBase* Attacker, AUnitBase* Target)
-{
-	if (AMatchGameMode* GM = GetWorld()->GetAuthGameMode<AMatchGameMode>())
-		GM->Handle_AttemptCharge(this, Attacker, Target);
-}
-
-void AMatchPlayerController::Server_Fight_Implementation(AUnitBase* Attacker, AUnitBase* Target)
-{
-	if (AMatchGameMode* GM = GetWorld()->GetAuthGameMode<AMatchGameMode>())
-		GM->Handle_Fight(this, Attacker, Target);
 }
 
 void AMatchPlayerController::OnUnStuckPressed()

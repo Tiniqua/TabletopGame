@@ -33,8 +33,6 @@ public:
     UPROPERTY(Replicated)                 float MoveMaxInches    = 0.f;
 
     UPROPERTY(Replicated) bool bHasShot         = false;
-    UPROPERTY(Replicated) bool bChargeAttempted = false;
-    UPROPERTY(Replicated) bool bEngaged         = false;
 
     // ---------- Replicated stat snapshot (so clients don’t need to DT lookup) ----------
     UPROPERTY(Replicated) int32 ToughnessRep = 0;
