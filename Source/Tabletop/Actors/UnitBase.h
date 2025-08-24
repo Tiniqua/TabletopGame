@@ -17,6 +17,10 @@ class TABLETOP_API AUnitBase : public AActor
 public:
     AUnitBase();
 
+
+    UFUNCTION(BlueprintCallable, BlueprintPure)
+    void GetModelWorldLocations(TArray<FVector>& Out) const;
+    
     // ---------- Identity / ownership (replicated) ----------
     UPROPERTY(Replicated) FName UnitId = NAME_None;
     UPROPERTY(Replicated) EFaction Faction = EFaction::None;
@@ -25,6 +29,8 @@ public:
     // Chosen weapon index within the row (server sets, clients read)
     UPROPERTY(Replicated) int32 WeaponIndex = 0;
 
+
+    
     // ---------- Runtime state (replicated) ----------
     UPROPERTY(ReplicatedUsing=OnRep_Models) int32 ModelsCurrent = 0;
     UPROPERTY(Replicated)                 int32 ModelsMax     = 0;

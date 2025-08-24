@@ -4,6 +4,7 @@
 #include "EngineUtils.h"
 #include "SetupGamemode.h"
 #include "Net/UnrealNetwork.h"
+#include "Tabletop/Actors/CoverVolume.h"
 #include "Tabletop/Actors/DeploymentZone.h"
 #include "Tabletop/Actors/UnitBase.h"
 #include "Tabletop/Characters/TabletopCharacter.h"
@@ -67,6 +68,15 @@ void AMatchGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutL
     
 }
 
+void AMatchGameState::Multicast_DrawShotDebug_Implementation(const FVector& WorldLoc,
+                                                             const FString& Msg,
+                                                             FColor Color, float Duration)
+{
+    // Draw 3D debug text for everyone
+    DrawDebugString(GetWorld(), WorldLoc, Msg, /*TestBaseActor*/nullptr,
+                    Color, Duration, /*bDrawShadow*/true, /*FontScale*/1.2f);
+}
+
 AMatchGameMode::AMatchGameMode()
 {
     GameStateClass = AMatchGameState::StaticClass();
@@ -94,6 +104,13 @@ void AMatchGameMode::ResetTurnFor(APlayerState* PS)
             It->ForceNetUpdate();
         }
     }
+}
+
+static inline const TCHAR* CoverTypeToText(ECoverType C)
+{
+    switch (C) { case ECoverType::Low: return TEXT("in cover (low)");
+    case ECoverType::High:return TEXT("in cover (high)");
+    default:               return TEXT("no cover"); }
 }
 
 bool AMatchGameMode::ValidateMove(AUnitBase* U, const FVector& Dest, float& OutSpentTabletopInches) const
@@ -241,15 +258,27 @@ void AMatchGameMode::Handle_ConfirmShoot(AMatchPlayerController* PC, AUnitBase* 
     const int32 AttacksPM = FMath::Max(0, Attacker->GetAttacks());
     const int32 TotalAtk  = Models * AttacksPM;
 
-    const int32 HitNeed   = FMath::Clamp(Attacker->WeaponSkillToHitRep, 2, 6);
-    const int32 Sval      = Attacker->WeaponStrengthRep;
-    const int32 Dmg       = FMath::Max(1, Attacker->WeaponDamageRep);
-    const int32 AP        = FMath::Max(0, Attacker->WeaponAPRep);
+    int32 HitMod = 0, SaveMod = 0;
+    ECoverType Cover = ECoverType::None;
+    QueryCover(Attacker, Target, HitMod, SaveMod, Cover);
 
-    const int32 Tval      = Target->GetToughness();
-    const int32 SaveBase  = Target->GetSave();
-    const int32 SaveNeed  = ModifiedSaveNeed(SaveBase, AP);
-    const bool  bHasSave  = (SaveNeed <= 6); // 7+ is "no save"
+    const bool bCoverApplied = (Cover != ECoverType::None);
+
+    // HitNeed: HIGH cover makes it harder to hit -> +1 to the needed roll
+    int32 HitNeed = FMath::Clamp(Attacker->WeaponSkillToHitRep + (HitMod * -1), 2, 6);
+    // (HitMod is −1 for High → we invert sign so it becomes +1 to the need; if you prefer, just set HitMod=+1 for High above and remove the *−1 here.)
+
+    const int32 Sval     = Attacker->WeaponStrengthRep;
+    const int32 Dmg      = FMath::Max(1, Attacker->WeaponDamageRep);
+    const int32 AP       = FMath::Max(0, Attacker->WeaponAPRep);
+
+    const int32 Tval     = Target->GetToughness();
+    const int32 SaveBase = Target->GetSave();
+
+    // SaveNeed: cover makes saving easier (e.g., 4+ → 3+) so the threshold goes DOWN by SaveMod
+    int32 SaveNeed = ModifiedSaveNeed(SaveBase, AP);
+    SaveNeed = FMath::Clamp(SaveNeed - SaveMod, 2, 7);
+    const bool bHasSave = (SaveNeed <= 6);    
 
     // Roll!
     int32 hits = 0;
@@ -279,6 +308,8 @@ void AMatchGameMode::Handle_ConfirmShoot(AMatchPlayerController* PC, AUnitBase* 
     Attacker->bHasShot = true;
     Attacker->ForceNetUpdate();
 
+    const int32 preModels = Target->ModelsCurrent;
+
     if (totalDamage > 0)
     {
         Target->ApplyDamage_Server(totalDamage); // this may Destroy() if wiped
@@ -286,6 +317,33 @@ void AMatchGameMode::Handle_ConfirmShoot(AMatchPlayerController* PC, AUnitBase* 
     else
     {
         Target->ForceNetUpdate(); // still tell clients preview cleared
+    }
+
+    const int32 postModels = IsValid(Target) ? Target->ModelsCurrent : 0;
+    const int32 modelsKilled = FMath::Max(0, preModels - postModels);
+    const int32 savesMade = bHasSave ? (wounds - unsaved) : 0;
+
+    // World-space text location (midpoint above line between units)
+    const FVector L0 = Attacker->GetActorLocation();
+    const FVector L1 = IsValid(Target) ? Target->GetActorLocation() : L0;
+    const FVector Mid = (L0 + L1) * 0.5f + FVector(0,0,150.f);
+
+    const TCHAR* CoverTxt = CoverTypeToText(Cover); // returns "no cover" / "in cover (low)" / "in cover (high)"
+    
+    const FString Msg = FString::Printf(
+     TEXT("Hit roll: %d/%d attacks hit\n")
+     TEXT("Wound roll: %d/%d hits wounded\n")
+     TEXT("Save roll: %d/%d wounds saved (%s)\n")
+     TEXT("Damage: %d dealt, %d models killed"),
+     hits, TotalAtk,
+     wounds, hits,
+     savesMade, wounds, CoverTxt,
+     totalDamage, modelsKilled
+ );
+
+    if (S)
+    {
+        S->Multicast_DrawShotDebug(Mid, Msg, FColor::Yellow, 4.f);
     }
 
     // Clear preview if it was pointing here
@@ -300,6 +358,149 @@ void AMatchGameMode::Handle_ConfirmShoot(AMatchPlayerController* PC, AUnitBase* 
     S->ForceNetUpdate();
 }
 
+static void DrawCoverTrace(UWorld* World,
+                           const FVector& A, const FVector& B,
+                           const FColor& Col, float Thk, float Time)
+{
+    if (!World) return;
+    DrawDebugLine(World, A, B, Col, /*bPersistent*/false, Time, 0, Thk);
+}
+
+static void DrawCoverNote(UWorld* World, const FVector& At, const FString& Msg,
+                          const FColor& Col, float Time)
+{
+    if (!World) return;
+    DrawDebugString(World, At, Msg, /*TestBaseActor*/nullptr, Col, Time, /*bDrawShadow*/false, 1.0f);
+}
+
+bool AMatchGameMode::ComputeCoverBetween(const FVector& From, const FVector& To, ECoverType& OutType) const
+{
+    OutType = ECoverType::None;
+
+    UWorld* World = GetWorld();
+    if (!World) return false;
+
+    FHitResult Hit;
+    FCollisionQueryParams Params(SCENE_QUERY_STAT(CoverTrace), /*bTraceComplex*/ false);
+    Params.bReturnPhysicalMaterial = false;
+
+    const bool bHit = World->LineTraceSingleByChannel(Hit, From, To, CoverTraceChannel, Params);
+
+    // Draw basic result (center-to-center), color refined later by caller if needed
+    if (bDebugCoverTraces)
+        DrawCoverTrace(World, From, To, bHit ? FColor::Yellow : FColor::Red, 1.5f, 2.f);
+
+    if (!bHit) return false;
+
+    if (ACoverVolume* CV = Cast<ACoverVolume>(Hit.GetActor()))
+    {
+        OutType = CV->CoverType;
+        return true;
+    }
+    return false;
+}
+
+bool AMatchGameMode::QueryCover(AUnitBase* A, AUnitBase* T,
+                                int32& OutHitMod, int32& OutSaveMod, ECoverType& OutType) const
+{
+    OutHitMod  = 0;
+    OutSaveMod = 0;
+    OutType    = ECoverType::None;
+    if (!A || !T) return false;
+
+    UWorld* World = GetWorld();
+    if (!World) return false;
+
+    const float ProxCm = CoverProximityInches * CmPerTabletopInch(); // consistent global scale
+
+    // ignore the two units
+    FCollisionQueryParams Params(SCENE_QUERY_STAT(CoverTraceFull), false);
+    Params.AddIgnoredActor(A);
+    Params.AddIgnoredActor(T);
+
+    auto TraceOne = [&](const FVector& From, const FVector& TargetPoint)->ECoverType
+    {
+        FHitResult Hit;
+        const bool bHit = World->LineTraceSingleByChannel(Hit, From, TargetPoint, CoverTraceChannel, Params);
+
+        if (!bHit)
+        {
+            if (bDebugCoverTraces) DrawCoverTrace(World, From, TargetPoint, FColor::Red, 0.75f, 1.5f);
+            return ECoverType::None;
+        }
+
+        // We hit *something* on the cover channel; only count ACoverVolume, and only if near the target
+        ACoverVolume* CV = Cast<ACoverVolume>(Hit.GetActor());
+        if (!CV)
+        {
+            if (bDebugCoverTraces) DrawCoverTrace(World, From, TargetPoint, FColor::Purple, 0.75f, 1.5f); // wrong object
+            return ECoverType::None;
+        }
+
+        const float dCm = FVector::Dist(Hit.ImpactPoint, TargetPoint);
+        const bool bProx = (dCm <= ProxCm);
+
+        if (bDebugCoverTraces)
+        {
+            const FColor C = bProx ? FColor::Green : FColor::Orange;
+            DrawCoverTrace(World, From, TargetPoint, C, 1.75f, 2.0f);
+            const FVector Mid = (From + TargetPoint) * 0.5f + FVector(0,0,25.f);
+            DrawCoverNote(World, Mid,
+                FString::Printf(TEXT("%s cover (%s)\n%.1f cm from target"),
+                    CV->CoverType==ECoverType::High?TEXT("High"):TEXT("Low"),
+                    bProx?TEXT("valid"):TEXT("too far"),
+                    dCm),
+                C, 1.5f);
+        }
+
+        return bProx ? CV->CoverType : ECoverType::None;
+    };
+
+    // 1) Quick center-to-center (fast path)
+    {
+        const FVector From = A->GetActorLocation();
+        const FVector To   = T->GetActorLocation();
+        if (ECoverType C = TraceOne(From, To); C != ECoverType::None)
+        {
+            OutType    = C;
+            OutSaveMod = 1;                 // +1 to save
+            if (C == ECoverType::High) OutHitMod = -1; // -1 to hit (we keep your sign convention)
+            return true;
+        }
+    }
+
+    // 2) Per-model sampling (early out on first High; otherwise accept Low if found)
+    TArray<FVector> FromPts, ToPts;
+    A->GetModelWorldLocations(FromPts);
+    T->GetModelWorldLocations(ToPts);
+
+    const int32 MaxFrom = FMath::Min(MaxCoverSamplesPerUnit, FromPts.Num());
+    const int32 MaxTo   = FMath::Min(MaxCoverSamplesPerUnit, ToPts.Num());
+
+    bool bAnyLow  = false;
+    bool bAnyHigh = false;
+
+    for (int32 i=0; i<MaxFrom; ++i)
+    {
+        for (int32 j=0; j<MaxTo; ++j)
+        {
+            const ECoverType C = TraceOne(FromPts[i], ToPts[j]);
+            if (C == ECoverType::High) { bAnyHigh = true; goto DONE; }
+            if (C == ECoverType::Low)  { bAnyLow  = true; }
+        }
+    }
+
+DONE:
+    if (bAnyHigh || bAnyLow)
+    {
+        OutType    = bAnyHigh ? ECoverType::High : ECoverType::Low;
+        OutSaveMod = 1;
+        if (bAnyHigh) OutHitMod = -1;
+        return true;
+    }
+
+    return false;
+}
 
 void AMatchGameMode::Handle_CancelPreview(AMatchPlayerController* PC, AUnitBase* Attacker)
 {

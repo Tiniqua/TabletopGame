@@ -93,6 +93,16 @@ void AUnitBase::Server_InitFromRow(APlayerState* OwnerPS, const FUnitRow& Row, i
     ForceNetUpdate();
 }
 
+void AUnitBase::GetModelWorldLocations(TArray<FVector>& Out) const
+{
+    Out.Reset();
+    for (UStaticMeshComponent* C : ModelMeshes)
+        if (IsValid(C)) Out.Add(C->GetComponentLocation());
+
+    if (Out.Num() == 0) Out.Add(GetActorLocation());
+}
+
+
 void AUnitBase::ApplyDamage_Server(int32 Damage)
 {
     if (!HasAuthority() || Damage <= 0) return;

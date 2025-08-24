@@ -8,6 +8,7 @@
 #include "Net/UnrealNetwork.h"
 #include "MatchGameMode.generated.h"
 
+enum class ECoverType : uint8;
 class AMatchPlayerController;
 class AUnitBase;
 
@@ -56,6 +57,10 @@ class TABLETOP_API AMatchGameState : public AGameStateBase
 {
 	GENERATED_BODY()
 public:
+
+	UFUNCTION(NetMulticast, Reliable)
+	void Multicast_DrawShotDebug(const FVector& WorldLoc, const FString& Msg,
+								 FColor Color = FColor::Yellow, float Duration = 4.f);
 
 	UPROPERTY(ReplicatedUsing=OnRep_Match)
 	FCombatPreview Preview;
@@ -139,6 +144,29 @@ public:
 	
 	float CmPerTabletopInch() const { return 2.54f * TabletopToUnrealInchScale; }
 
+	UPROPERTY(EditDefaultsOnly, Category="Cover")
+	TEnumAsByte<ECollisionChannel> CoverTraceChannel = ECC_GameTraceChannel4;
+
+	// hard cap to keep perf predictable when sampling per-model
+	UPROPERTY(EditDefaultsOnly, Category="Cover")
+	int32 MaxCoverSamplesPerUnit = 4;
+
+	// NEW: proximity window for cover validity (tabletop inches)
+	UPROPERTY(EditDefaultsOnly, Category="Cover")
+	float CoverProximityInches = 6.f;
+
+	// NEW: toggle draw-debug lines/text for cover traces
+	UPROPERTY(EditDefaultsOnly, Category="Cover|Debug")
+	bool bDebugCoverTraces = true;
+
+	// Simple center-to-center line; returns first cover hit (if any)
+	bool ComputeCoverBetween(const FVector& From, const FVector& To, ECoverType& OutType) const;
+
+	// Full query with per-model fallback; returns modifiers
+	bool QueryCover(class AUnitBase* Attacker, class AUnitBase* Target,
+					int32& OutHitMod, int32& OutSaveMod, ECoverType& OutType) const;
+
+	
 
 
 protected:
