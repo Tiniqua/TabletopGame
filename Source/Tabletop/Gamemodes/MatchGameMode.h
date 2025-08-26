@@ -8,6 +8,7 @@
 #include "Net/UnrealNetwork.h"
 #include "MatchGameMode.generated.h"
 
+class ANetDebugTextActor;
 enum class ECoverType : uint8;
 class AMatchPlayerController;
 class AUnitBase;
@@ -109,6 +110,31 @@ public:
 
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	virtual void BeginPlay() override;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="NetDebug")
+	bool bEnableNetDebugDraw = true;
+
+	UPROPERTY(EditAnywhere, Category="NetDebug")
+	TSubclassOf<ANetDebugTextActor> DebugTextActorClass;
+
+	UPROPERTY(EditAnywhere, Category="NetDebug", meta=(ClampMin="4.0"))
+	float DebugTextWorldSize = 28.f;
+
+	// 2D on-screen message (like GEngine->AddOnScreenDebugMessage)
+	UFUNCTION(NetMulticast, Unreliable)
+	void Multicast_ScreenMsg(const FString& Text, FColor Color = FColor::Yellow, float Time = 3.f, int32 Key = -1);
+
+	// World text at a 3D location
+	UFUNCTION(NetMulticast, Unreliable)
+	void Multicast_DrawWorldText(const FVector& WorldLoc, const FString& Text, FColor Color = FColor::Black, float Time = 3.f, float FontScale = 1.f);
+
+	// Lines & spheres (works in packaged builds)
+	UFUNCTION(NetMulticast, Unreliable)
+	void Multicast_DrawLine(const FVector& Start, const FVector& End, FColor Color, float Time = 5.f, float Thickness = 2.f);
+
+	UFUNCTION(NetMulticast, Unreliable)
+	void Multicast_DrawSphere(const FVector& Center, float Radius, int32 Segments, FColor Color, float Time = 5.f, float Thickness = 2.f);
+
 };
 
 UCLASS()

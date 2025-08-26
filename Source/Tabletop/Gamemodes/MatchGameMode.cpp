@@ -3,10 +3,12 @@
 
 #include "EngineUtils.h"
 #include "SetupGamemode.h"
+#include "Components/LineBatchComponent.h"
 #include "Kismet/GameplayStatics.h"
 #include "Net/UnrealNetwork.h"
 #include "Tabletop/Actors/CoverVolume.h"
 #include "Tabletop/Actors/DeploymentZone.h"
+#include "Tabletop/Actors/NetDebugTextActor.h"
 #include "Tabletop/Actors/ObjectiveMarker.h"
 #include "Tabletop/Actors/UnitBase.h"
 #include "Tabletop/Characters/TabletopCharacter.h"
@@ -93,6 +95,76 @@ void AMatchGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutL
     
 }
 
+void AMatchGameState::Multicast_ScreenMsg_Implementation(const FString& Text, FColor Color, float Time, int32 Key)
+{
+    if (!bEnableNetDebugDraw) return;
+    if (GEngine) GEngine->AddOnScreenDebugMessage(Key, Time, Color, Text);
+}
+
+void AMatchGameState::Multicast_DrawWorldText_Implementation(const FVector& WorldLoc, const FString& Text, FColor Color, float Time, float /*FontScale*/)
+{
+    if (!bEnableNetDebugDraw) return;
+    UWorld* W = GetWorld(); if (!W) return;
+
+    //const TSubclassOf<ANetDebugTextActor> Cls = DebugTextActorClass ? DebugTextActorClass : ANetDebugTextActor::StaticClass();
+    FTransform T(FRotator::ZeroRotator, WorldLoc);
+    TSubclassOf<ANetDebugTextActor> Cls = DebugTextActorClass;
+    if (!Cls)
+    {
+        Cls = TSubclassOf<ANetDebugTextActor>(ANetDebugTextActor::StaticClass());
+    }
+
+    // usage:
+    if (ANetDebugTextActor* A = W->SpawnActorDeferred<ANetDebugTextActor>(Cls, T))
+    {
+        A->Init(Text, Color, DebugTextWorldSize, Time);
+        UGameplayStatics::FinishSpawningActor(A, T);
+    }
+}
+
+static void DrawLineViaBatcher(UWorld* World, const FVector& A, const FVector& B, const FLinearColor& Color, float Thickness, float Time)
+{
+    if (!World) return;
+    if (ULineBatchComponent* LB = World->PersistentLineBatcher ? World->PersistentLineBatcher : World->LineBatcher)
+    {
+        LB->DrawLine(A, B, Color.ToFColor(true), SDPG_World, Thickness, Time);
+        LB->MarkRenderStateDirty();
+        return;
+    }
+    // Fallback (may be compiled out in Shipping)
+    DrawDebugLine(World, A, B, Color.ToFColor(true), false, Time, 0, Thickness);
+}
+
+void AMatchGameState::Multicast_DrawLine_Implementation(const FVector& Start, const FVector& End, FColor Color, float Time, float Thickness)
+{
+    if (!bEnableNetDebugDraw) return;
+    DrawLineViaBatcher(GetWorld(), Start, End, Color, Thickness, Time);
+}
+
+void AMatchGameState::Multicast_DrawSphere_Implementation(const FVector& Center, float Radius, int32 Segments, FColor Color, float Time, float Thickness)
+{
+    if (!bEnableNetDebugDraw) return;
+    UWorld* World = GetWorld();
+    if (!World) return;
+
+    // Use 3 great-circle rings via the batcher (Shipping-safe), or fallback to DrawDebugSphere.
+    const int32 N = FMath::Max(8, Segments);
+    auto Ring = [&](const FVector& X, const FVector& Y)
+    {
+        FVector Prev = Center + X * Radius;
+        for (int32 i=1;i<=N;++i)
+        {
+            const float T = (float)i / (float)N * 2.f * PI;
+            const FVector P = Center + (X*FMath::Cos(T) + Y*FMath::Sin(T)) * Radius;
+            DrawLineViaBatcher(World, Prev, P, Color, Thickness, Time);
+            Prev = P;
+        }
+    };
+    Ring(FVector::RightVector, FVector::ForwardVector); // XY
+    Ring(FVector::RightVector, FVector::UpVector);      // XZ
+    Ring(FVector::UpVector,    FVector::ForwardVector); // YZ
+}
+
 void AMatchGameState::BeginPlay()
 {
     Super::BeginPlay();
@@ -103,13 +175,24 @@ void AMatchGameState::BeginPlay()
         if (auto* M = Cast<AObjectiveMarker>(A)) Objectives.Add(M);
 }
 
-void AMatchGameState::Multicast_DrawShotDebug_Implementation(const FVector& WorldLoc,
-                                                             const FString& Msg,
-                                                             FColor Color, float Duration)
+void AMatchGameState::Multicast_DrawShotDebug_Implementation(const FVector& WorldLoc, const FString& Msg, FColor Color, float Duration)
 {
-    // Draw 3D debug text for everyone
-    DrawDebugString(GetWorld(), WorldLoc, Msg, /*TestBaseActor*/nullptr,
-                    Color, Duration, /*bDrawShadow*/true, /*FontScale*/1.2f);
+    if (!bEnableNetDebugDraw) return;
+    UWorld* W = GetWorld(); if (!W) return;
+
+    FTransform T(FRotator::ZeroRotator, WorldLoc);
+    TSubclassOf<ANetDebugTextActor> Cls = DebugTextActorClass;
+    if (!Cls)
+    {
+        Cls = TSubclassOf<ANetDebugTextActor>(ANetDebugTextActor::StaticClass());
+    }
+
+    // usage:
+    if (ANetDebugTextActor* A = W->SpawnActorDeferred<ANetDebugTextActor>(Cls, T))
+    {
+        A->Init(Msg, Color, DebugTextWorldSize * 1.1f, Duration);
+        UGameplayStatics::FinishSpawningActor(A, T);
+    }
 }
 
 AMatchGameMode::AMatchGameMode()
@@ -180,18 +263,19 @@ void AMatchGameMode::ResolveMoveToBudget(
         bOutClamped = true;
     }
 
-#if !(UE_BUILD_SHIPPING)
-    const FColor Col = bOutClamped ? FColor::Yellow : FColor::Green;
-    if (UWorld* World = GetWorld())
+    // --- Networked debug draw (everyone sees it) ---
+    if (AMatchGameState* S = GS())
     {
-        DrawDebugSphere(World, Start, 25.f, 16, Col, false, 6.f);
-        DrawDebugSphere(World, WantedDest, 25.f, 16, FColor::Silver, false, 6.f); // requested
-        DrawDebugSphere(World, OutFinalDest, 25.f, 16, Col, false, 6.f);          // actual
-        DrawDebugLine  (World, Start, OutFinalDest, Col, false, 6.f, 0, 2.f);
+        const FColor Col = bOutClamped ? FColor::Yellow : FColor::Green;
+        S->Multicast_DrawSphere(Start,      25.f, 16, Col,           6.f, 2.f);
+        S->Multicast_DrawSphere(WantedDest, 25.f, 16, FColor::Silver,6.f, 2.f); // requested
+        S->Multicast_DrawSphere(OutFinalDest,25.f,16, Col,           6.f, 2.f); // actual
+        S->Multicast_DrawLine  (Start, OutFinalDest, Col, 6.f, 2.f);
         if (bOutClamped)
-            DrawDebugLine(World, OutFinalDest, WantedDest, FColor::Red, false, 6.f, 0, 1.f);
+        {
+            S->Multicast_DrawLine(OutFinalDest, WantedDest, FColor::Red, 6.f, 1.f);
+        }
     }
-#endif
 }
 
 bool AMatchGameMode::ValidateMove(AUnitBase* U, const FVector& Dest, float& OutSpentTabletopInches) const
@@ -199,36 +283,32 @@ bool AMatchGameMode::ValidateMove(AUnitBase* U, const FVector& Dest, float& OutS
     OutSpentTabletopInches = 0.f;
     if (!U) return false;
 
-    UWorld* World = GetWorld();
     const FVector Start = U->GetActorLocation();
 
     // Convert UE centimeters → tabletop inches using the global scale
     const float distCm   = FVector::Dist(Start, Dest);
-    const float cmPerTTI = CmPerTabletopInch();              // e.g. 50.8 or 50.0
-    const float distTTIn = distCm / cmPerTTI;                // “tabletop inches”
+    const float cmPerTTI = CmPerTabletopInch();
+    const float distTTIn = distCm / cmPerTTI;
     OutSpentTabletopInches = distTTIn;
 
     const bool bAllowed = (distTTIn <= U->MoveBudgetInches);
-
-#if !(UE_BUILD_SHIPPING)
     const FColor Col = bAllowed ? FColor::Green : FColor::Red;
 
-    if (World)
+    if (AMatchGameState* S = GS())
     {
-        DrawDebugSphere(World, Start, 25.f, 16, Col, false, 10.f);
-        DrawDebugSphere(World, Dest,  25.f, 16, Col, false, 10.f);
-        DrawDebugLine  (World, Start, Dest, Col, false, 10.f, 0, 2.f);
+        // world debug
+        S->Multicast_DrawSphere(Start, 25.f, 16, Col, 10.f, 2.f);
+        S->Multicast_DrawSphere(Dest,  25.f, 16, Col, 10.f, 2.f);
+        S->Multicast_DrawLine  (Start, Dest, Col, 10.f, 2.f);
+
+        // screen text
+        const FString Msg = FString::Printf(
+            TEXT("[MoveCheck] Unit=%s  Dist=%.0f cm (%.1f TT-in)  Budget=%.1f TT-in  Max=%.1f TT-in  Scale=%.2f UE-in/TT-in (%.2f cm/TT-in)  -> %s"),
+            *U->GetName(), distCm, distTTIn, U->MoveBudgetInches, U->MoveMaxInches,
+            TabletopToUnrealInchScale, cmPerTTI,
+            bAllowed ? TEXT("ALLOW") : TEXT("DENY"));
+        S->Multicast_ScreenMsg(Msg, Col, 10.f);
     }
-    if (GEngine)
-    {
-        GEngine->AddOnScreenDebugMessage(
-            -1, 10.f, Col,
-            FString::Printf(TEXT("[MoveCheck] Unit=%s  Dist=%.0f cm (%.1f TT-in)  Budget=%.1f TT-in  Max=%.1f TT-in  Scale=%.2f UE-in/TT-in (%.2f cm/TT-in)  -> %s"),
-                *U->GetName(), distCm, distTTIn, U->MoveBudgetInches, U->MoveMaxInches,
-                TabletopToUnrealInchScale, cmPerTTI,
-                bAllowed ? TEXT("ALLOW") : TEXT("DENY")));
-    }
-#endif
 
     return bAllowed;
 }
@@ -266,16 +346,14 @@ void AMatchGameMode::Handle_MoveUnit(AMatchPlayerController* PC, AUnitBase* Unit
     NotifyUnitTransformChanged(Unit);   // keep your auto-facing hook here if desired
     Unit->ForceNetUpdate();
 
-#if !(UE_BUILD_SHIPPING)
-    if (GEngine)
+    if (AMatchGameState* S2 = GS())
     {
-        GEngine->AddOnScreenDebugMessage(
-            -1, 5.f, bClamped ? FColor::Yellow : FColor::Green,
-            FString::Printf(TEXT("[MoveApply] %s  Spent=%.1f TT-in  NewBudget=%.1f TT-in  %s"),
-                *Unit->GetName(), spentTTIn, Unit->MoveBudgetInches,
-                bClamped ? TEXT("(clamped)") : TEXT("")));
+        const FString Msg = FString::Printf(
+            TEXT("[MoveApply] %s  Spent=%.1f TT-in  NewBudget=%.1f TT-in  %s"),
+            *Unit->GetName(), spentTTIn, Unit->MoveBudgetInches,
+            bClamped ? TEXT("(clamped)") : TEXT(""));
+        S2->Multicast_ScreenMsg(Msg, bClamped ? FColor::Yellow : FColor::Green, 5.f);
     }
-#endif
 
     // Tell the initiating client it succeeded (you can add a 'bClamped' param if you want)
     if (IsValid(PC))
@@ -433,7 +511,7 @@ void AMatchGameMode::Handle_ConfirmShoot(AMatchPlayerController* PC, AUnitBase* 
     // 3) schedule damage and debug at impact time
     FTimerDelegate Del;
     Del.BindUFunction(this, FName("ApplyDelayedDamageAndReport"),
-                      Attacker, Target, totalDamage, Mid, Msg);
+                      Attacker, Target, ClampedDamage, Mid, Msg);
 
     FTimerHandle Tmp;
     GetWorld()->GetTimerManager().SetTimer(Tmp, Del, FMath::Max(0.f, ImpactDelay), false);
@@ -502,14 +580,20 @@ static void DrawCoverTrace(UWorld* World,
                            const FColor& Col, float Thk, float Time)
 {
     if (!World) return;
-    DrawDebugLine(World, A, B, Col, /*bPersistent*/false, Time, 0, Thk);
+    if (AMatchGameState* S = World->GetGameState<AMatchGameState>())
+    {
+        S->Multicast_DrawLine(A, B, Col, Time, Thk);
+    }
 }
 
 static void DrawCoverNote(UWorld* World, const FVector& At, const FString& Msg,
                           const FColor& Col, float Time)
 {
     if (!World) return;
-    DrawDebugString(World, At, Msg, /*TestBaseActor*/nullptr, Col, Time, /*bDrawShadow*/false, 1.0f);
+    if (AMatchGameState* S = World->GetGameState<AMatchGameState>())
+    {
+        S->Multicast_DrawWorldText(At, Msg, Col, Time, 1.0f);
+    }
 }
 
 bool AMatchGameMode::ComputeCoverBetween(const FVector& From, const FVector& To, ECoverType& OutType) const
@@ -1062,7 +1146,7 @@ void AMatchGameMode::ApplyDelayedDamageAndReport(AUnitBase* Attacker, AUnitBase*
     }
 
     // show the text at impact time (optional—move earlier if you prefer instant feedback)
-    S->Multicast_DrawShotDebug(DebugMid, DebugMsg, FColor::Yellow, 4.f);
+    S->Multicast_DrawShotDebug(DebugMid, DebugMsg, FColor::Black, 8.f);
 
     S->OnDeploymentChanged.Broadcast();
     S->ForceNetUpdate();
