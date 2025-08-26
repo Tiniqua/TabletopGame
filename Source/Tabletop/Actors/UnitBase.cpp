@@ -151,6 +151,31 @@ void AUnitBase::Multicast_PlayMuzzleAndImpactFX_AllModels_Implementation(AUnitBa
     GetWorld()->GetTimerManager().SetTimer(ImpactFXTimerHandle, Del, FMath::Max(0.f, DelaySeconds), false);
 }
 
+int32 AUnitBase::FindBestShooterModelIndex(const FVector& TargetWorld) const
+{
+    int32 BestIdx = INDEX_NONE;
+    float BestD2  = TNumericLimits<float>::Max();
+
+    for (int32 i = 0; i < ModelMeshes.Num(); ++i)
+    {
+        UStaticMeshComponent* C = ModelMeshes[i];
+        if (!IsValid(C)) continue;
+
+        const FVector MuzzleLoc = GetMuzzleTransform(i).GetLocation();
+
+        // Prefer horizontal closeness (ignore Z for tabletop feel)
+        const float D2 = FVector::DistSquaredXY(MuzzleLoc, TargetWorld);
+        if (D2 < BestD2)
+        {
+            BestD2  = D2;
+            BestIdx = i;
+        }
+    }
+
+    // Fallback if nothing valid (e.g., zero models)
+    return (BestIdx == INDEX_NONE) ? 0 : BestIdx;
+}
+
 void AUnitBase::PlayImpactFXAndSounds_Delayed(AUnitBase* TargetUnit)
 {
     if (!IsValid(TargetUnit)) return;
@@ -335,6 +360,7 @@ void AUnitBase::RebuildFormation()
         C->SetGenerateOverlapEvents(false);
         C->SetCollisionResponseToAllChannels(ECR_Ignore);
         C->SetCollisionResponseToChannel(SelectionTraceECC, ECR_Block);
+        C->SetCollisionResponseToChannel(ECC_GameTraceChannel5 /*LOS*/, ECR_Ignore);
 
         ModelMeshes.Add(C);
     }

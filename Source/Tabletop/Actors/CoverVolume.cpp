@@ -32,4 +32,7 @@ ACoverVolume::ACoverVolume()
 	// Starter size; adjust per instance in the level
 	Box->SetBoxExtent(FVector(100.f, 100.f, 75.f));
 	Box->SetRelativeLocation(FVector::ZeroVector);
+
+	Box->SetCollisionResponseToChannel(ECC_GameTraceChannel6 /*Move*/, ECR_Ignore);
+	Visual->SetCollisionResponseToChannel(ECC_GameTraceChannel6 /*Move*/, ECR_Ignore);
 }

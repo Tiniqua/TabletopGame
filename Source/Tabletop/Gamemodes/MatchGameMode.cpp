@@ -398,20 +398,31 @@ void AMatchGameMode::Handle_ConfirmShoot(AMatchPlayerController* PC, AUnitBase* 
     // aesthetic rotate (or use your VisualFaceActor if preferred)
     Attacker->FaceActorInstant(Target);
 
-    // Build the debug location & the *pre* message now (we'll append models killed after damage)
+    // LOS: count visible target models
+    const int32 TargetModels    = FMath::Max(0, Target->ModelsCurrent);
+    const int32 VisibleModels   = CountVisibleTargetModels(Attacker, Target);
+    const int32 WoundsPerModel  = Target->GetWoundsPerModel();
+    const int32 MaxDamageByLOS  = VisibleModels * WoundsPerModel;
+
+    // Clamp the damage so we can't kill more models than are visible
+    const int32 ClampedDamage = FMath::Min(totalDamage, MaxDamageByLOS);
+
+    // World-space debug location
     const FVector L0  = Attacker->GetActorLocation();
     const FVector L1  = Target->GetActorLocation();
     const FVector Mid = (L0 + L1) * 0.5f + FVector(0,0,150.f);
 
+    // Build the pre-message; we'll append actual models killed after damage lands
     const TCHAR* CoverTxt = CoverTypeToText(Cover);
     const int32  savesMade = bHasSave ? (wounds - unsaved) : 0;
 
     const FString Msg = FString::Printf(
-        TEXT("Hit roll: %d/%d hit\nWound roll: %d/%d wounded\nSave roll: %d/%d saved (%s)\nDamage: %d (applied on impact)"),
+        TEXT("Hit: %d/%d\nWound: %d/%d\nSave: %d/%d (%s)\nLOS: %d/%d models visible (cap %d dmg)\nDamage rolled: %d -> applied: %d on impact"),
         hits, TotalAtk,
         wounds, hits,
         savesMade, wounds, CoverTxt,
-        totalDamage);
+        VisibleModels, TargetModels, MaxDamageByLOS,
+        totalDamage, ClampedDamage);
 
     // 1) pick a single delay and use it everywhere
     const float ImpactDelay = Attacker->ImpactDelaySeconds;
@@ -437,6 +448,53 @@ void AMatchGameMode::Handle_ConfirmShoot(AMatchPlayerController* PC, AUnitBase* 
 
     S->OnDeploymentChanged.Broadcast();
     S->ForceNetUpdate();
+}
+
+int32 AMatchGameMode::CountVisibleTargetModels(const AUnitBase* Attacker, const AUnitBase* Target) const
+{
+    if (!Attacker || !Target) return 0;
+
+    UWorld* World = GetWorld();
+    if (!World) return 0;
+
+    int32 Visible = 0;
+
+    for (int32 j = 0; j < Target->ModelMeshes.Num(); ++j)
+    {
+        UStaticMeshComponent* TC = Target->ModelMeshes[j];
+        if (!IsValid(TC)) continue;
+
+        // Aim at a stable point on the model (socket or small offset)
+        FVector ModelPoint;
+        if (TC->DoesSocketExist(Target->ImpactSocketName))
+        {
+            ModelPoint = TC->GetSocketTransform(Target->ImpactSocketName, RTS_World).GetLocation();
+        }
+        else
+        {
+            ModelPoint = TC->GetComponentTransform().TransformPosition(Target->ImpactOffsetLocal);
+        }
+
+        // Pick the closest shooter model to this target model as origin
+        const int32 ShooterIdx = Attacker->FindBestShooterModelIndex(ModelPoint);
+        const FVector From = Attacker->GetMuzzleTransform(ShooterIdx).GetLocation();
+        const FVector To   = ModelPoint;
+
+        FHitResult Hit;
+        FCollisionQueryParams Params(SCENE_QUERY_STAT(UnitLOS), /*bTraceComplex*/ true);
+        Params.AddIgnoredActor(const_cast<AUnitBase*>(Attacker));
+        Params.AddIgnoredActor(const_cast<AUnitBase*>(Target));
+
+        const bool bHit = World->LineTraceSingleByChannel(
+            Hit, From, To, ECollisionChannel::ECC_GameTraceChannel3 /*LOS*/, Params);
+
+        // Visible if NOTHING blocks on LOS channel
+        if (!bHit)
+        {
+            ++Visible;
+        }
+    }
+    return Visible;
 }
 
 static void DrawCoverTrace(UWorld* World,

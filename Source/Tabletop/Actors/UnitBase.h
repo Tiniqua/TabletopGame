@@ -92,6 +92,9 @@ public:
     UPROPERTY(EditAnywhere, Category="Facing", meta=(ClampMin="-180.0", ClampMax="180.0"))
     float FacingYawOffsetDeg = -90.f;
 
+    UFUNCTION(BlueprintPure)
+    int32 GetWoundsPerModel() const { return FMath::Max(1, WoundsRep); }
+    
     UPROPERTY(EditAnywhere, Category="Formation", meta=(ClampMin="0.0"))
     float ModelPaddingCm = 2.0f;   // extra gap between model silhouettes
 
@@ -162,6 +165,12 @@ public:
     // If your mesh assets often lack simple collision, this helps selection “just work”
     UPROPERTY(EditDefaultsOnly, Category="Selection")
     bool bUseComplexForSelection = true;
+
+    // Simple list of per-model components (client & server)
+    UPROPERTY() TArray<UStaticMeshComponent*> ModelMeshes;
+
+    UFUNCTION(BlueprintPure, Category="VFX")
+    int32 FindBestShooterModelIndex(const FVector& TargetWorld) const;
     
 protected:
     virtual void BeginPlay() override;
@@ -177,8 +186,7 @@ protected:
     // ---------- Components / visuals ----------
     UPROPERTY(VisibleAnywhere) USphereComponent* SelectCollision = nullptr;
 
-    // Simple list of per-model components (client & server)
-    UPROPERTY() TArray<UStaticMeshComponent*> ModelMeshes;
+    
 
     // Mesh to use per model (assign in BP or defaults)
     UPROPERTY(EditDefaultsOnly, Category="Unit|Visual")

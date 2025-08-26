@@ -147,7 +147,8 @@ public:
 	bool ValidateShoot(AUnitBase* Attacker, AUnitBase* Target) const;
 	void Handle_SelectTarget(AMatchPlayerController* PC, AUnitBase* Attacker, AUnitBase* Target);
 	void Handle_ConfirmShoot(AMatchPlayerController* PC, AUnitBase* Attacker, AUnitBase* Target);
-	
+	int32 CountVisibleTargetModels(const AUnitBase* Attacker, const AUnitBase* Target) const;
+
 	// Cancels any active GS->Preview if this PC owns the Attacker and it's their turn
 	void Handle_CancelPreview(class AMatchPlayerController* PC, class AUnitBase* Attacker);
 	
