@@ -146,8 +146,8 @@ public:
 
     // multicast (already present)
     UFUNCTION(NetMulticast, Unreliable)
-    void Multicast_PlayMuzzleAndImpactFX_AllModels(class AUnitBase* TargetUnit);
-
+    void Multicast_PlayMuzzleAndImpactFX_AllModels(class AUnitBase* TargetUnit, float DelaySeconds);
+    
     // helper the timer will call
     UFUNCTION()
     void PlayImpactFXAndSounds_Delayed(AUnitBase* TargetUnit);

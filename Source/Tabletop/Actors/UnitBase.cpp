@@ -108,57 +108,47 @@ FTransform AUnitBase::GetMuzzleTransform(int32 ModelIndex) const
 
     UStaticMeshComponent* C = ModelMeshes[ModelIndex];
 
+    // If we have a socket, assume the socket is authored to face the weapon's forward.
     if (C->DoesSocketExist(MuzzleSocketName))
     {
         return C->GetSocketTransform(MuzzleSocketName, ERelativeTransformSpace::RTS_World);
     }
 
+    // Fallback: place at local offset, and add the same yaw offset you use for the model.
     const FTransform WT = C->GetComponentTransform();
     const FVector   WLoc = WT.TransformPosition(MuzzleOffsetLocal);
-    return FTransform((WT.GetRotation()).Rotator(), WLoc, WT.GetScale3D());
+
+    FRotator OutRot = WT.Rotator();             // current model component world rot
+    OutRot.Yaw += FacingYawOffsetDeg;           // apply your visual yaw offset
+
+    return FTransform(OutRot, WLoc, WT.GetScale3D());
 }
 
-void AUnitBase::Multicast_PlayMuzzleAndImpactFX_AllModels_Implementation(AUnitBase* TargetUnit)
+void AUnitBase::Multicast_PlayMuzzleAndImpactFX_AllModels_Implementation(AUnitBase* TargetUnit, float DelaySeconds)
 {
     if (!IsValid(TargetUnit)) return;
-    const UWorld* World = GetWorld();
-    if (!World) return;
 
-    // ---------- MUZZLES (attacker side, instant) ----------
+    // --- MUZZLES (instant) ---
     const FVector TargetCenter = TargetUnit->GetActorLocation();
-
     for (int32 i = 0; i < ModelMeshes.Num(); ++i)
     {
         UStaticMeshComponent* C = ModelMeshes[i];
         if (!IsValid(C)) continue;
 
-        const FTransform MuzzXform = GetMuzzleTransform(i);
-        const FVector MuzzLoc = MuzzXform.GetLocation();
+        const FTransform Muzz = GetMuzzleTransform(i);
+        const FVector MuzzLoc = Muzz.GetLocation();
         const FRotator AimRot = (TargetCenter - MuzzLoc).Rotation();
 
-        if (FX_Muzzle)
-        {
-            UNiagaraFunctionLibrary::SpawnSystemAtLocation(GetWorld(), FX_Muzzle, MuzzLoc, AimRot);
-        }
-        if (Snd_Muzzle)
-        {
-            // orient isn’t required for spatialization but fine to pass
-            UGameplayStatics::PlaySoundAtLocation(
-                this, Snd_Muzzle, MuzzLoc, 1.f, 1.f, 0.f, SndAttenuation, SndConcurrency, nullptr);
-        }
+        if (FX_Muzzle) UNiagaraFunctionLibrary::SpawnSystemAtLocation(GetWorld(), FX_Muzzle, MuzzLoc, AimRot);
+        if (Snd_Muzzle) UGameplayStatics::PlaySoundAtLocation(this, Snd_Muzzle, MuzzLoc, 1.f, 1.f, 0.f, SndAttenuation, SndConcurrency);
     }
 
-    // ---------- schedule impacts ----------
-    float Delay = ImpactDelaySeconds;
-
-    // Bind a standard delegate (no inline constructor)
+    // --- schedule IMPACTS after the provided delay ---
     FTimerDelegate Del;
     Del.BindUFunction(this, FName("PlayImpactFXAndSounds_Delayed"), TargetUnit);
 
-    // Clear any previous scheduled impacts for this unit, then set
     GetWorld()->GetTimerManager().ClearTimer(ImpactFXTimerHandle);
-    GetWorld()->GetTimerManager().SetTimer(ImpactFXTimerHandle, Del, FMath::Max(0.f, Delay), false);
-
+    GetWorld()->GetTimerManager().SetTimer(ImpactFXTimerHandle, Del, FMath::Max(0.f, DelaySeconds), false);
 }
 
 void AUnitBase::PlayImpactFXAndSounds_Delayed(AUnitBase* TargetUnit)
@@ -183,7 +173,9 @@ void AUnitBase::PlayImpactFXAndSounds_Delayed(AUnitBase* TargetUnit)
         }
 
         const FVector InDir = (ImpactLoc - AttackerCenter).GetSafeNormal();
-        const FRotator ImpactRot = InDir.Rotation();
+        FRotator ImpactRot = InDir.Rotation();
+
+        ImpactRot.Yaw -= FacingYawOffsetDeg; 
 
         if (FX_Impact)
         {

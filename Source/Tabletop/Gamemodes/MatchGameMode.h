@@ -130,6 +130,10 @@ public:
 	void ScoreObjectivesForRound();
 	void NotifyUnitTransformChanged(AUnitBase* Changed);
 
+	UFUNCTION()
+	void ApplyDelayedDamageAndReport(AUnitBase* Attacker, AUnitBase* Target, int32 TotalDamage, FVector DebugMid, FString DebugMsg);
+
+
 	void FinalizePlayerJoin(APlayerController* PC);
 	void TallyObjectives_EndOfRound();
 

@@ -336,8 +336,6 @@ void AMatchGameMode::Handle_SelectTarget(AMatchPlayerController* PC, AUnitBase* 
     S->OnDeploymentChanged.Broadcast();
     S->ForceNetUpdate();
 }
-
-
 void AMatchGameMode::Handle_ConfirmShoot(AMatchPlayerController* PC, AUnitBase* Attacker, AUnitBase* Target)
 {
     if (!HasAuthority() || !PC || !Attacker || !Target) return;
@@ -348,7 +346,7 @@ void AMatchGameMode::Handle_ConfirmShoot(AMatchPlayerController* PC, AUnitBase* 
     if (Attacker->OwningPS != PC->PlayerState) return;
     if (!ValidateShoot(Attacker, Target)) return;
 
-    // Snapshot needed stats (already replicated/snapshotted on the unit)
+    // -------- resolution (unchanged) --------
     const int32 Models    = FMath::Max(0, Attacker->ModelsCurrent);
     const int32 AttacksPM = FMath::Max(0, Attacker->GetAttacks());
     const int32 TotalAtk  = Models * AttacksPM;
@@ -357,25 +355,19 @@ void AMatchGameMode::Handle_ConfirmShoot(AMatchPlayerController* PC, AUnitBase* 
     ECoverType Cover = ECoverType::None;
     QueryCover(Attacker, Target, HitMod, SaveMod, Cover);
 
-    const bool bCoverApplied = (Cover != ECoverType::None);
-
-    // HitNeed: HIGH cover makes it harder to hit -> +1 to the needed roll
     int32 HitNeed = FMath::Clamp(Attacker->WeaponSkillToHitRep + (HitMod * -1), 2, 6);
-    // (HitMod is −1 for High → we invert sign so it becomes +1 to the need; if you prefer, just set HitMod=+1 for High above and remove the *−1 here.)
 
-    const int32 Sval     = Attacker->WeaponStrengthRep;
-    const int32 Dmg      = FMath::Max(1, Attacker->WeaponDamageRep);
-    const int32 AP       = FMath::Max(0, Attacker->WeaponAPRep);
+    const int32 Sval = Attacker->WeaponStrengthRep;
+    const int32 Dmg  = FMath::Max(1, Attacker->WeaponDamageRep);
+    const int32 AP   = FMath::Max(0, Attacker->WeaponAPRep);
 
     const int32 Tval     = Target->GetToughness();
     const int32 SaveBase = Target->GetSave();
 
-    // SaveNeed: cover makes saving easier (e.g., 4+ → 3+) so the threshold goes DOWN by SaveMod
     int32 SaveNeed = ModifiedSaveNeed(SaveBase, AP);
     SaveNeed = FMath::Clamp(SaveNeed - SaveMod, 2, 7);
-    const bool bHasSave = (SaveNeed <= 6);    
+    const bool bHasSave = (SaveNeed <= 6);
 
-    // Roll!
     int32 hits = 0;
     for (int i=0; i<TotalAtk; ++i)
         if (D6() >= HitNeed) ++hits;
@@ -394,57 +386,48 @@ void AMatchGameMode::Handle_ConfirmShoot(AMatchPlayerController* PC, AUnitBase* 
     }
     else
     {
-        unsaved = wounds; // no save allowed
+        unsaved = wounds;
     }
 
     const int32 totalDamage = unsaved * Dmg;
 
-    // Apply effects
+    // mark shooter as having shot right away
     Attacker->bHasShot = true;
     Attacker->ForceNetUpdate();
 
-    const int32 preModels = Target->ModelsCurrent;
-
-    if (totalDamage > 0)
-    {
-        Target->ApplyDamage_Server(totalDamage); // this may Destroy() if wiped
-    }
-    else
-    {
-        Target->ForceNetUpdate(); // still tell clients preview cleared
-    }
-
-    const int32 postModels = IsValid(Target) ? Target->ModelsCurrent : 0;
-    const int32 modelsKilled = FMath::Max(0, preModels - postModels);
-    const int32 savesMade = bHasSave ? (wounds - unsaved) : 0;
-
-    // World-space text location (midpoint above line between units)
-    const FVector L0 = Attacker->GetActorLocation();
-    const FVector L1 = IsValid(Target) ? Target->GetActorLocation() : L0;
-    const FVector Mid = (L0 + L1) * 0.5f + FVector(0,0,150.f);
-
-    const TCHAR* CoverTxt = CoverTypeToText(Cover); // returns "no cover" / "in cover (low)" / "in cover (high)"
-    
-    const FString Msg = FString::Printf(
-     TEXT("Hit roll: %d/%d attacks hit\n")
-     TEXT("Wound roll: %d/%d hits wounded\n")
-     TEXT("Save roll: %d/%d wounds saved (%s)\n")
-     TEXT("Damage: %d dealt, %d models killed"),
-     hits, TotalAtk,
-     wounds, hits,
-     savesMade, wounds, CoverTxt,
-     totalDamage, modelsKilled
- );
-
-    if (S)
-    {
-        S->Multicast_DrawShotDebug(Mid, Msg, FColor::Yellow, 4.f);
-    }
-
+    // aesthetic rotate (or use your VisualFaceActor if preferred)
     Attacker->FaceActorInstant(Target);
 
-    Attacker->Multicast_PlayMuzzleAndImpactFX_AllModels(Target);
+    // Build the debug location & the *pre* message now (we'll append models killed after damage)
+    const FVector L0  = Attacker->GetActorLocation();
+    const FVector L1  = Target->GetActorLocation();
+    const FVector Mid = (L0 + L1) * 0.5f + FVector(0,0,150.f);
 
+    const TCHAR* CoverTxt = CoverTypeToText(Cover);
+    const int32  savesMade = bHasSave ? (wounds - unsaved) : 0;
+
+    const FString Msg = FString::Printf(
+        TEXT("Hit roll: %d/%d hit\nWound roll: %d/%d wounded\nSave roll: %d/%d saved (%s)\nDamage: %d (applied on impact)"),
+        hits, TotalAtk,
+        wounds, hits,
+        savesMade, wounds, CoverTxt,
+        totalDamage);
+
+    // 1) pick a single delay and use it everywhere
+    const float ImpactDelay = Attacker->ImpactDelaySeconds;
+
+    // 2) multicast VFX/SFX with the SAME delay (be sure the function signature takes the float)
+    Attacker->Multicast_PlayMuzzleAndImpactFX_AllModels(Target, ImpactDelay);
+
+    // 3) schedule damage and debug at impact time
+    FTimerDelegate Del;
+    Del.BindUFunction(this, FName("ApplyDelayedDamageAndReport"),
+                      Attacker, Target, totalDamage, Mid, Msg);
+
+    FTimerHandle Tmp;
+    GetWorld()->GetTimerManager().SetTimer(Tmp, Del, FMath::Max(0.f, ImpactDelay), false);
+
+    // clear preview now (or delay if you prefer)
     if (S->Preview.Attacker == Attacker)
     {
         S->Preview.Attacker = nullptr;
@@ -1008,6 +991,25 @@ void AMatchGameMode::NotifyUnitTransformChanged(AUnitBase* Changed)
         }
     }
 }
+
+void AMatchGameMode::ApplyDelayedDamageAndReport(AUnitBase* Attacker, AUnitBase* Target, int32 TotalDamage, FVector DebugMid, FString DebugMsg)
+{
+    if (!HasAuthority()) return;
+    AMatchGameState* S = GS();
+    if (!S) return;
+
+    if (IsValid(Target) && TotalDamage > 0)
+    {
+        Target->ApplyDamage_Server(TotalDamage);
+    }
+
+    // show the text at impact time (optional—move earlier if you prefer instant feedback)
+    S->Multicast_DrawShotDebug(DebugMid, DebugMsg, FColor::Yellow, 4.f);
+
+    S->OnDeploymentChanged.Broadcast();
+    S->ForceNetUpdate();
+}
+
 void AMatchGameMode::FinalizePlayerJoin(APlayerController* PC)
 {
     if (!PC) return;
