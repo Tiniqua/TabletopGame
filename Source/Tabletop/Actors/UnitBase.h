@@ -92,6 +92,20 @@ public:
     UPROPERTY(EditAnywhere, Category="Facing", meta=(ClampMin="-180.0", ClampMax="180.0"))
     float FacingYawOffsetDeg = -90.f;
 
+    UPROPERTY(EditAnywhere, Category="Formation", meta=(ClampMin="0.0"))
+    float ModelPaddingCm = 2.0f;   // extra gap between model silhouettes
+
+    // Visual offset if the mesh's "forward" isn't +X
+    UPROPERTY(EditAnywhere, Category="Formation", meta=(ClampMin="-180.0", ClampMax="180.0"))
+    float ModelYawVisualOffsetDeg = 0.0f;
+
+    // ===== Visual-only facing (no actor rotation) =====
+    UFUNCTION(BlueprintCallable, Category="Facing")
+    void VisualFaceActor(AActor* Target);
+
+    UFUNCTION(BlueprintCallable, Category="Facing")
+    void VisualFaceYaw(float WorldYaw);
+
     // --- VFX: simple "all models" volley ---
     UPROPERTY(EditDefaultsOnly, Category="VFX")
     class UNiagaraSystem* FX_Muzzle = nullptr;

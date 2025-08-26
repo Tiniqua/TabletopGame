@@ -319,43 +319,105 @@ void AUnitBase::RebuildFormation()
         if (ModelMesh) C->SetStaticMesh(ModelMesh);
         C->SetRenderCustomDepth(false);
         C->SetRelativeScale3D(FVector(ModelScale));
-        
+
+        // selection trace response (keep what you already set)
+        C->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+        C->SetGenerateOverlapEvents(false);
+        C->SetCollisionResponseToAllChannels(ECR_Ignore);
         C->SetCollisionResponseToChannel(SelectionTraceECC, ECR_Block);
-        
+
         ModelMeshes.Add(C);
     }
 
     if (ModelMeshes.Num() == 0) return;
 
-    // Derive footprint from mesh bounds (fallback if no mesh)
-    FVector Ext = FVector(50,50,50);
+    // --- derive a "disc radius" from the mesh's XY bounds ---
+    FVector Ext(50, 50, 50);
     if (UStaticMesh* SM = ModelMeshes[0]->GetStaticMesh())
         Ext = SM->GetBounds().BoxExtent;
 
-    const float CellX = (Ext.X * 2.f * ModelScale) + ExtraSpacingCmX;
-    const float CellY = (Ext.Y * 2.f * ModelScale) + ExtraSpacingCmY;
+    const float radius = FMath::Max(Ext.X, Ext.Y) * ModelScale; // cm
+    const float d      = (radius * 2.0f) + ModelPaddingCm;      // center-to-center spacing (no overlap)
 
-    if (GridColumns <= 0) GridColumns = 5;
-    const int32 Cols = FMath::Max(1, GridColumns);
-    const int32 Rows = FMath::CeilToInt(float(ModelMeshes.Num()) / float(Cols));
+    // --- generate hex spiral centers (most compact even spacing) ---
+    // axial -> 2D mapping (triangular lattice with nearest-neighbour spacing d)
+    auto AxialToXY = [d](int q, int r) -> FVector2D
+    {
+        const float x = d * (q + r * 0.5f);
+        const float y = d * (FMath::Sqrt(3.f) * 0.5f) * r;
+        return FVector2D(x, y);
+    };
 
-    // Center the whole rectangle, not per-row
-    const float OriginX = -0.5f * (Cols - 1) * CellX;
-    const float OriginY = -0.5f * (Rows - 1) * CellY;
+    struct FCube { int x, y, z; };
+    auto Dir = [](int i)->FCube {
+        static const FCube dirs[6] = {
+            { 1,-1, 0},{ 1, 0,-1},{ 0, 1,-1},
+            {-1, 1, 0},{-1, 0, 1},{ 0,-1, 1}
+        };
+        return dirs[i % 6];
+    };
+    auto Add = [](FCube a, FCube b){ return FCube{a.x+b.x, a.y+b.y, a.z+b.z}; };
 
+    TArray<FVector2D> points; points.Reserve(Needed);
+    points.Add(FVector2D::ZeroVector); // center for model 0
+
+    for (int ring = 1; points.Num() < Needed; ++ring)
+    {
+        // start at (ring, -ring, 0)
+        FCube cur{ring, -ring, 0};
+        for (int side = 0; side < 6 && points.Num() < Needed; ++side)
+        {
+            const FCube step = Dir(side);
+            for (int stepIdx = 0; stepIdx < ring && points.Num() < Needed; ++stepIdx)
+            {
+                // axial (q,r) = (x,z)
+                points.Add(AxialToXY(cur.x, cur.z));
+                cur = Add(cur, step);
+            }
+        }
+    }
+
+    // center the whole blob around actor origin (subtract centroid)
+    FVector2D centroid(0,0);
+    for (const auto& p : points) centroid += p;
+    centroid /= float(points.Num());
+
+    // apply to components (keep existing relative rotation & scale, only relocate)
     for (int32 i = 0; i < ModelMeshes.Num(); ++i)
     {
-        const int32 Row = i / Cols;
-        const int32 Col = i % Cols;
-        const float X = OriginX + Col * CellX;
-        const float Y = OriginY - Row * CellY; // rows “back”
         if (UStaticMeshComponent* C = ModelMeshes[i])
         {
-            C->SetRelativeLocation(FVector(X, Y, 0.f));
-            C->SetRelativeRotation(FRotator::ZeroRotator);
+            const FVector2D p = points[i] - centroid;
+            C->SetRelativeLocation(FVector(p.X, p.Y, 0.f));
+
+            // keep whatever visual yaw offset you want
+            C->SetRelativeRotation(FRotator(0.f, ModelYawVisualOffsetDeg, 0.f));
             C->SetRelativeScale3D(FVector(ModelScale));
         }
     }
+}
+
+void AUnitBase::VisualFaceYaw(float WorldYaw)
+{
+    // convert to the unit's local frame
+    const float LocalYaw = WorldYaw - GetActorRotation().Yaw;
+
+    for (UStaticMeshComponent* C : ModelMeshes)
+    {
+        if (!C) continue;
+        C->SetRelativeRotation(FRotator(0.f, LocalYaw + ModelYawVisualOffsetDeg, 0.f));
+    }
+}
+
+void AUnitBase::VisualFaceActor(AActor* Target)
+{
+    if (!Target) return;
+    FVector Dir = Target->GetActorLocation() - GetActorLocation();
+    Dir.Z = 0.f;
+    if (Dir.IsNearlyZero()) return;
+
+    const float Yaw = Dir.Rotation().Yaw;
+    VisualFaceYaw(Yaw);
 }
 
 AActor* AUnitBase::FindNearestEnemyUnit(float MaxSearchDistCm) const
