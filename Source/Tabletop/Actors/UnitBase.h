@@ -106,30 +106,51 @@ public:
     UFUNCTION(BlueprintCallable, Category="Facing")
     void VisualFaceYaw(float WorldYaw);
 
-    // --- VFX: simple "all models" volley ---
-    UPROPERTY(EditDefaultsOnly, Category="VFX")
+    UPROPERTY(EditDefaultsOnly, Category="VFX|Audio")
     class UNiagaraSystem* FX_Muzzle = nullptr;
 
-    UPROPERTY(EditDefaultsOnly, Category="VFX")
+    UPROPERTY(EditDefaultsOnly, Category="VFX|Audio")
     class UNiagaraSystem* FX_Impact = nullptr;
 
-    // Optional sockets/offsets
+    UPROPERTY(EditDefaultsOnly, Category="VFX|Audio")
+    class USoundBase* Snd_Muzzle = nullptr;
+
+    UPROPERTY(EditDefaultsOnly, Category="VFX|Audio")
+    class USoundBase* Snd_Impact = nullptr;
+
+    // optional attenuation/concurrency (leave null to use defaults)
+    UPROPERTY(EditDefaultsOnly, Category="VFX|Audio")
+    class USoundAttenuation* SndAttenuation = nullptr;
+
+    UPROPERTY(EditDefaultsOnly, Category="VFX|Audio")
+    class USoundConcurrency* SndConcurrency = nullptr;
+
+    // delay between muzzle and impact (seconds)
+    UPROPERTY(EditAnywhere, Category="VFX|Audio", meta=(ClampMin="0.0"))
+    float ImpactDelaySeconds = 1.0f;
+
+    // sockets/offsets you already use
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="VFX")
     FName MuzzleSocketName = "Muzzle";
 
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="VFX")
-    FVector MuzzleOffsetLocal = FVector(30, 0, 60);
+    FVector MuzzleOffsetLocal = FVector(30,0,60);
 
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="VFX")
-    FName ImpactSocketName = "Impact";   // if your target mesh has one
+    FName ImpactSocketName = "Impact";
 
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="VFX")
-    FVector ImpactOffsetLocal = FVector(0, 0, 40);
+    FVector ImpactOffsetLocal = FVector(0,0,40);
 
-    // Fire muzzle on every attacker model and impact on every target model.
-    // Keep it Unreliable (purely cosmetic).
+    FTimerHandle ImpactFXTimerHandle;
+
+    // multicast (already present)
     UFUNCTION(NetMulticast, Unreliable)
     void Multicast_PlayMuzzleAndImpactFX_AllModels(class AUnitBase* TargetUnit);
+
+    // helper the timer will call
+    UFUNCTION()
+    void PlayImpactFXAndSounds_Delayed(AUnitBase* TargetUnit);
 
     // (helpers)
     UFUNCTION(BlueprintPure, Category="VFX")

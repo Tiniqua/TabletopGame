@@ -7,6 +7,7 @@
 #include "Components/StaticMeshComponent.h"
 #include "NiagaraFunctionLibrary.h"
 #include "NiagaraComponent.h"
+#include "Kismet/GameplayStatics.h"
 #include "Tabletop/PlayerStates/TabletopPlayerState.h"
 
 AUnitBase::AUnitBase()
@@ -119,10 +120,11 @@ FTransform AUnitBase::GetMuzzleTransform(int32 ModelIndex) const
 
 void AUnitBase::Multicast_PlayMuzzleAndImpactFX_AllModels_Implementation(AUnitBase* TargetUnit)
 {
-    if (!FX_Muzzle && !FX_Impact) return;         // nothing to do
     if (!IsValid(TargetUnit)) return;
+    const UWorld* World = GetWorld();
+    if (!World) return;
 
-    // ---------- MUZZLES (attacker side) ----------
+    // ---------- MUZZLES (attacker side, instant) ----------
     const FVector TargetCenter = TargetUnit->GetActorLocation();
 
     for (int32 i = 0; i < ModelMeshes.Num(); ++i)
@@ -136,14 +138,33 @@ void AUnitBase::Multicast_PlayMuzzleAndImpactFX_AllModels_Implementation(AUnitBa
 
         if (FX_Muzzle)
         {
-            UNiagaraFunctionLibrary::SpawnSystemAtLocation(
-                GetWorld(), FX_Muzzle, MuzzLoc, AimRot);
+            UNiagaraFunctionLibrary::SpawnSystemAtLocation(GetWorld(), FX_Muzzle, MuzzLoc, AimRot);
+        }
+        if (Snd_Muzzle)
+        {
+            // orient isn’t required for spatialization but fine to pass
+            UGameplayStatics::PlaySoundAtLocation(
+                this, Snd_Muzzle, MuzzLoc, 1.f, 1.f, 0.f, SndAttenuation, SndConcurrency, nullptr);
         }
     }
 
-    // ---------- IMPACTS (target side) ----------
-    // For each target model: pick an impact point (socket if present, else local offset),
-    // and orient along the incoming direction from the attacker.
+    // ---------- schedule impacts ----------
+    float Delay = ImpactDelaySeconds;
+
+    // Bind a standard delegate (no inline constructor)
+    FTimerDelegate Del;
+    Del.BindUFunction(this, FName("PlayImpactFXAndSounds_Delayed"), TargetUnit);
+
+    // Clear any previous scheduled impacts for this unit, then set
+    GetWorld()->GetTimerManager().ClearTimer(ImpactFXTimerHandle);
+    GetWorld()->GetTimerManager().SetTimer(ImpactFXTimerHandle, Del, FMath::Max(0.f, Delay), false);
+
+}
+
+void AUnitBase::PlayImpactFXAndSounds_Delayed(AUnitBase* TargetUnit)
+{
+    if (!IsValid(TargetUnit)) return;
+
     const FVector AttackerCenter = GetActorLocation();
 
     for (int32 j = 0; j < TargetUnit->ModelMeshes.Num(); ++j)
@@ -152,31 +173,28 @@ void AUnitBase::Multicast_PlayMuzzleAndImpactFX_AllModels_Implementation(AUnitBa
         if (!IsValid(TC)) continue;
 
         FVector ImpactLoc;
-        FRotator ImpactRot;
-
         if (TC->DoesSocketExist(TargetUnit->ImpactSocketName))
         {
-            const FTransform Sock = TC->GetSocketTransform(TargetUnit->ImpactSocketName, ERelativeTransformSpace::RTS_World);
-            ImpactLoc = Sock.GetLocation();
+            ImpactLoc = TC->GetSocketTransform(TargetUnit->ImpactSocketName, ERelativeTransformSpace::RTS_World).GetLocation();
         }
         else
         {
-            const FTransform WT = TC->GetComponentTransform();
-            ImpactLoc = WT.TransformPosition(TargetUnit->ImpactOffsetLocal);
+            ImpactLoc = TC->GetComponentTransform().TransformPosition(TargetUnit->ImpactOffsetLocal);
         }
 
-        // Face roughly against the incoming shot direction
         const FVector InDir = (ImpactLoc - AttackerCenter).GetSafeNormal();
-        ImpactRot = InDir.Rotation();
+        const FRotator ImpactRot = InDir.Rotation();
 
         if (FX_Impact)
         {
-            UNiagaraFunctionLibrary::SpawnSystemAtLocation(
-                GetWorld(), FX_Impact, ImpactLoc, ImpactRot);
+            UNiagaraFunctionLibrary::SpawnSystemAtLocation(GetWorld(), FX_Impact, ImpactLoc, ImpactRot);
+        }
+        if (Snd_Impact)
+        {
+            UGameplayStatics::PlaySoundAtLocation(this, Snd_Impact, ImpactLoc, 1.f, 1.f, 0.f, SndAttenuation, SndConcurrency);
         }
     }
 }
-
 
 void AUnitBase::GetModelWorldLocations(TArray<FVector>& Out) const
 {
