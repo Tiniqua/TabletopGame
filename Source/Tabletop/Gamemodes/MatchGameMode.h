@@ -133,6 +133,8 @@ public:
 	void FinalizePlayerJoin(APlayerController* PC);
 	void TallyObjectives_EndOfRound();
 
+	void ResolveMoveToBudget(const AUnitBase* U, const FVector& WantedDest, FVector& OutFinalDest, float& OutSpentTTIn,
+	                         bool& bOutClamped) const;
 	// Movement
 	bool ValidateMove(AUnitBase* Unit, const FVector& Dest, float& OutDistInches) const;
 	void Handle_MoveUnit(AMatchPlayerController* PC, AUnitBase* Unit, const FVector& Dest);

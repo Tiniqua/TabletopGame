@@ -82,9 +82,15 @@ public:
     UFUNCTION(BlueprintCallable, Category="Facing")
     void FaceNearestEnemyInstant();
 
+    UFUNCTION(BlueprintPure, Category="Teams")
+    bool IsEnemy(const AUnitBase* Other) const;
+    
     UFUNCTION(BlueprintPure, Category="Facing")
     AActor* FindNearestEnemyUnit(float MaxSearchDistCm = 100000.f) const;
     bool FaceActorInstant(AActor* Target, float YawSnapDeg = 1.0f);
+
+    UPROPERTY(EditAnywhere, Category="Facing", meta=(ClampMin="-180.0", ClampMax="180.0"))
+    float FacingYawOffsetDeg = -90.f;
 
     // --- VFX: simple "all models" volley ---
     UPROPERTY(EditDefaultsOnly, Category="VFX")
@@ -114,6 +120,13 @@ public:
     // (helpers)
     UFUNCTION(BlueprintPure, Category="VFX")
     FTransform GetMuzzleTransform(int32 ModelIndex) const;
+
+    UPROPERTY(EditDefaultsOnly, Category="Selection")
+    TEnumAsByte<ECollisionChannel> SelectionTraceECC = ECC_GameTraceChannel2;
+
+    // If your mesh assets often lack simple collision, this helps selection “just work”
+    UPROPERTY(EditDefaultsOnly, Category="Selection")
+    bool bUseComplexForSelection = true;
     
 protected:
     virtual void BeginPlay() override;

@@ -319,6 +319,9 @@ void AUnitBase::RebuildFormation()
         if (ModelMesh) C->SetStaticMesh(ModelMesh);
         C->SetRenderCustomDepth(false);
         C->SetRelativeScale3D(FVector(ModelScale));
+        
+        C->SetCollisionResponseToChannel(SelectionTraceECC, ECR_Block);
+        
         ModelMeshes.Add(C);
     }
 
@@ -364,8 +367,9 @@ AActor* AUnitBase::FindNearestEnemyUnit(float MaxSearchDistCm) const
     for (TActorIterator<AUnitBase> It(GetWorld()); It; ++It)
     {
         AUnitBase* U = *It;
-        if (U == this || !U->IsActorInitialized()) continue;
-        if (U->OwningPS == OwningPS) continue; // same side
+        if (!U || U == this || !U->IsActorInitialized()) continue;
+        if (!IsEnemy(U)) continue;
+
         const float D2 = FVector::DistSquared(MyLoc, U->GetActorLocation());
         if (D2 < BestSq) { BestSq = D2; Best = U; }
     }
@@ -383,7 +387,7 @@ bool AUnitBase::FaceActorInstant(AActor* Target, float YawSnapDeg)
     const float DeltaYaw = FMath::Abs(FMath::FindDeltaAngleDegrees(GetActorRotation().Yaw, Desired.Yaw));
     if (DeltaYaw < YawSnapDeg) return false;
 
-    SetActorRotation(FRotator(0.f, Desired.Yaw, 0.f)); // relies on SetReplicateMovement(true)
+    SetActorRotation(FRotator(0.f, Desired.Yaw + FacingYawOffsetDeg, 0.f));
     return true;
 }
 
@@ -393,6 +397,30 @@ void AUnitBase::FaceNearestEnemyInstant()
     {
         FaceActorInstant(Enemy);
     }
+}
+
+bool AUnitBase::IsEnemy(const AUnitBase* Other) const
+{
+    if (!Other || Other == this) return false;
+
+    APlayerState* MyPS    = OwningPS;
+    APlayerState* TheirPS = Other->OwningPS;
+
+    // If both PS valid, prefer team check when available
+    if (MyPS && TheirPS)
+    {
+        const ATabletopPlayerState* M = Cast<ATabletopPlayerState>(MyPS);
+        const ATabletopPlayerState* T = Cast<ATabletopPlayerState>(TheirPS);
+        if (M && T && M->TeamNum > 0 && T->TeamNum > 0)
+        {
+            return M->TeamNum != T->TeamNum;
+        }
+        // Fall back to pointer inequality
+        return MyPS != TheirPS;
+    }
+
+    // If either side has no PS yet, be conservative: NOT enemies.
+    return false;
 }
 
 /** Replication setup */

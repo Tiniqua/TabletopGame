@@ -148,6 +148,52 @@ static inline const TCHAR* CoverTypeToText(ECoverType C)
     default:               return TEXT("no cover"); }
 }
 
+void AMatchGameMode::ResolveMoveToBudget(
+    const AUnitBase* U,
+    const FVector&   WantedDest,
+    FVector&         OutFinalDest,
+    float&           OutSpentTTIn,
+    bool&            bOutClamped) const
+{
+    OutFinalDest = WantedDest;
+    OutSpentTTIn = 0.f;
+    bOutClamped  = false;
+    if (!U) return;
+
+    const FVector Start   = U->GetActorLocation();
+    const FVector Delta   = WantedDest - Start;
+    const float   DistCm  = Delta.Size();
+    if (DistCm <= KINDA_SMALL_NUMBER) return;
+
+    const float CmPerTTI  = CmPerTabletopInch();
+    const float DistTTIn  = DistCm / CmPerTTI;
+    const float SpendTTIn = FMath::Min(DistTTIn, U->MoveBudgetInches);
+
+    OutSpentTTIn = SpendTTIn;
+
+    // Scale along the direction to fit inside budget
+    const float AllowedCm = SpendTTIn * CmPerTTI;
+    if (AllowedCm + KINDA_SMALL_NUMBER < DistCm)
+    {
+        const FVector Dir = Delta / DistCm;
+        OutFinalDest = Start + Dir * AllowedCm;
+        bOutClamped = true;
+    }
+
+#if !(UE_BUILD_SHIPPING)
+    const FColor Col = bOutClamped ? FColor::Yellow : FColor::Green;
+    if (UWorld* World = GetWorld())
+    {
+        DrawDebugSphere(World, Start, 25.f, 16, Col, false, 6.f);
+        DrawDebugSphere(World, WantedDest, 25.f, 16, FColor::Silver, false, 6.f); // requested
+        DrawDebugSphere(World, OutFinalDest, 25.f, 16, Col, false, 6.f);          // actual
+        DrawDebugLine  (World, Start, OutFinalDest, Col, false, 6.f, 0, 2.f);
+        if (bOutClamped)
+            DrawDebugLine(World, OutFinalDest, WantedDest, FColor::Red, false, 6.f, 0, 1.f);
+    }
+#endif
+}
+
 bool AMatchGameMode::ValidateMove(AUnitBase* U, const FVector& Dest, float& OutSpentTabletopInches) const
 {
     OutSpentTabletopInches = 0.f;
@@ -187,52 +233,57 @@ bool AMatchGameMode::ValidateMove(AUnitBase* U, const FVector& Dest, float& OutS
     return bAllowed;
 }
 
-void AMatchGameMode::Handle_MoveUnit(AMatchPlayerController* PC, AUnitBase* Unit, const FVector& Dest)
+void AMatchGameMode::Handle_MoveUnit(AMatchPlayerController* PC, AUnitBase* Unit, const FVector& WantedDest)
 {
     if (!HasAuthority() || !PC || !Unit) return;
 
-    // Only during Move phase and only owner may move (your existing guards)
     AMatchGameState* S = GS();
     if (!S || S->Phase != EMatchPhase::Battle || S->TurnPhase != ETurnPhase::Move) return;
     if (PC->PlayerState != S->CurrentTurn) return;
     if (Unit->OwningPS != PC->PlayerState) return;
 
-    float spentTTIn = 0.f;
-    if (!ValidateMove(Unit, Dest, spentTTIn))
+    // Resolve clamped movement
+    FVector finalDest = WantedDest;
+    float   spentTTIn = 0.f;
+    bool    bClamped  = false;
+
+    ResolveMoveToBudget(Unit, WantedDest, finalDest, spentTTIn, bClamped);
+
+    // No budget left / no displacement
+    if (spentTTIn <= KINDA_SMALL_NUMBER || finalDest.Equals(Unit->GetActorLocation(), 0.1f))
     {
-        // Over budget → tell the initiating client to deselect
-        if (IsValid(PC))
+        // Still tell client they’re out of budget to clear drag/select if you like:
+        if (Unit->MoveBudgetInches <= KINDA_SMALL_NUMBER && IsValid(PC))
         {
-            PC->Client_OnMoveDenied_OverBudget(Unit, spentTTIn, Unit->MoveBudgetInches);
+            PC->Client_OnMoveDenied_OverBudget(Unit, /*requested*/0.f, Unit->MoveBudgetInches);
         }
         return;
     }
 
-    // Spend the tabletop-inches budget and move
+    // Spend and move
     Unit->MoveBudgetInches = FMath::Max(0.f, Unit->MoveBudgetInches - spentTTIn);
-    Unit->SetActorLocation(Dest);
-    NotifyUnitTransformChanged(Unit);
+    Unit->SetActorLocation(finalDest);
+    NotifyUnitTransformChanged(Unit);   // keep your auto-facing hook here if desired
     Unit->ForceNetUpdate();
 
 #if !(UE_BUILD_SHIPPING)
     if (GEngine)
     {
         GEngine->AddOnScreenDebugMessage(
-            -1, 5.f, FColor::Yellow,
-            FString::Printf(TEXT("[MoveApply] %s  Spent=%.1f TT-in  NewBudget=%.1f TT-in"),
-                *Unit->GetName(), spentTTIn, Unit->MoveBudgetInches));
+            -1, 5.f, bClamped ? FColor::Yellow : FColor::Green,
+            FString::Printf(TEXT("[MoveApply] %s  Spent=%.1f TT-in  NewBudget=%.1f TT-in  %s"),
+                *Unit->GetName(), spentTTIn, Unit->MoveBudgetInches,
+                bClamped ? TEXT("(clamped)") : TEXT("")));
     }
 #endif
 
-    // Tell the initiating client to clear selection
+    // Tell the initiating client it succeeded (you can add a 'bClamped' param if you want)
     if (IsValid(PC))
     {
         PC->Client_OnUnitMoved(Unit, spentTTIn, Unit->MoveBudgetInches);
+        // Or create a new RPC, e.g. Client_OnUnitMovedClamped(Unit, spentTTIn, Unit->MoveBudgetInches)
     }
-
 }
-
-
 
 bool AMatchGameMode::ValidateShoot(AUnitBase* A, AUnitBase* T) const
 {
@@ -784,9 +835,12 @@ void AMatchGameMode::HandleRequestDeploy(APlayerController* PC, FName UnitId, co
         // ---- Initialize runtime state if it's a UnitBase ----
         if (AUnitBase* UB = Cast<AUnitBase>(Spawned))
         {
+            UB->Server_InitFromRow(PC->PlayerState.Get(), *Row, Row->DefaultWeaponIndex);
+            UB->FaceNearestEnemyInstant();
+            
             NotifyUnitTransformChanged(UB);
             // Use DefaultWeaponIndex from the row (validated inside Server_InitFromRow if needed)
-            UB->Server_InitFromRow(PC->PlayerState.Get(), *Row, Row->DefaultWeaponIndex);
+          
         }
         else
         {
@@ -940,20 +994,20 @@ void AMatchGameMode::ScoreObjectivesForRound()
 void AMatchGameMode::NotifyUnitTransformChanged(AUnitBase* Changed)
 {
     if (!Changed) return;
-    const float AffectRadius = 4000.f; // tweak
+    const float AffectRadius = 4000.f;
     const FVector C = Changed->GetActorLocation();
 
     for (TActorIterator<AUnitBase> It(GetWorld()); It; ++It)
     {
         AUnitBase* U = *It;
-        if (!U || U->OwningPS == Changed->OwningPS) continue; // only enemies
+        if (!U) continue;
+        if (!U->IsEnemy(Changed)) continue;
         if (FVector::DistSquared(C, U->GetActorLocation()) <= AffectRadius * AffectRadius)
         {
             U->FaceNearestEnemyInstant();
         }
     }
 }
-
 void AMatchGameMode::FinalizePlayerJoin(APlayerController* PC)
 {
     if (!PC) return;
