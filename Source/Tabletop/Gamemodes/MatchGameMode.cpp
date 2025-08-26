@@ -211,6 +211,7 @@ void AMatchGameMode::Handle_MoveUnit(AMatchPlayerController* PC, AUnitBase* Unit
     // Spend the tabletop-inches budget and move
     Unit->MoveBudgetInches = FMath::Max(0.f, Unit->MoveBudgetInches - spentTTIn);
     Unit->SetActorLocation(Dest);
+    NotifyUnitTransformChanged(Unit);
     Unit->ForceNetUpdate();
 
 #if !(UE_BUILD_SHIPPING)
@@ -256,7 +257,7 @@ void AMatchGameMode::Handle_SelectTarget(AMatchPlayerController* PC, AUnitBase* 
     if (PC->PlayerState != S->CurrentTurn) return;
     if (Attacker->OwningPS != PC->PlayerState) return;
 
-    // Null target → treat as cancel
+    // Null/invalid target -> cancel preview
     if (!Target || !ValidateShoot(Attacker, Target))
     {
         if (S->Preview.Attacker == Attacker)
@@ -264,19 +265,27 @@ void AMatchGameMode::Handle_SelectTarget(AMatchPlayerController* PC, AUnitBase* 
             S->Preview.Attacker = nullptr;
             S->Preview.Target   = nullptr;
             S->Preview.Phase    = S->TurnPhase;
+
+            // Optional: revert to nearest enemy when canceling
+            Attacker->FaceNearestEnemyInstant();
         }
         S->OnDeploymentChanged.Broadcast();
         S->ForceNetUpdate();
         return;
     }
 
+    // Valid selection -> set preview and face the explicit target
     S->Preview.Attacker = Attacker;
     S->Preview.Target   = Target;
     S->Preview.Phase    = S->TurnPhase;
 
+    // Face *the target* (not the nearest enemy)
+    Attacker->FaceActorInstant(Target);
+
     S->OnDeploymentChanged.Broadcast();
     S->ForceNetUpdate();
 }
+
 
 void AMatchGameMode::Handle_ConfirmShoot(AMatchPlayerController* PC, AUnitBase* Attacker, AUnitBase* Target)
 {
@@ -381,7 +390,10 @@ void AMatchGameMode::Handle_ConfirmShoot(AMatchPlayerController* PC, AUnitBase* 
         S->Multicast_DrawShotDebug(Mid, Msg, FColor::Yellow, 4.f);
     }
 
-    // Clear preview if it was pointing here
+    Attacker->FaceActorInstant(Target);
+
+    Attacker->Multicast_PlayMuzzleAndImpactFX_AllModels(Target);
+
     if (S->Preview.Attacker == Attacker)
     {
         S->Preview.Attacker = nullptr;
@@ -772,6 +784,7 @@ void AMatchGameMode::HandleRequestDeploy(APlayerController* PC, FName UnitId, co
         // ---- Initialize runtime state if it's a UnitBase ----
         if (AUnitBase* UB = Cast<AUnitBase>(Spawned))
         {
+            NotifyUnitTransformChanged(UB);
             // Use DefaultWeaponIndex from the row (validated inside Server_InitFromRow if needed)
             UB->Server_InitFromRow(PC->PlayerState.Get(), *Row, Row->DefaultWeaponIndex);
         }
@@ -924,6 +937,22 @@ void AMatchGameMode::ScoreObjectivesForRound()
     S->ScoreP2 += P2Delta;
 }
 
+void AMatchGameMode::NotifyUnitTransformChanged(AUnitBase* Changed)
+{
+    if (!Changed) return;
+    const float AffectRadius = 4000.f; // tweak
+    const FVector C = Changed->GetActorLocation();
+
+    for (TActorIterator<AUnitBase> It(GetWorld()); It; ++It)
+    {
+        AUnitBase* U = *It;
+        if (!U || U->OwningPS == Changed->OwningPS) continue; // only enemies
+        if (FVector::DistSquared(C, U->GetActorLocation()) <= AffectRadius * AffectRadius)
+        {
+            U->FaceNearestEnemyInstant();
+        }
+    }
+}
 
 void AMatchGameMode::FinalizePlayerJoin(APlayerController* PC)
 {

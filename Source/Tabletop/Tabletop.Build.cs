@@ -16,7 +16,8 @@ public class Tabletop : ModuleRules
 				"InputCore",
 				"UMG",
 				"Slate",
-				"SlateCore"
+				"SlateCore",
+				"Niagara"
 			});
 		
 		PrivateDependencyModuleNames.AddRange(new string[] {

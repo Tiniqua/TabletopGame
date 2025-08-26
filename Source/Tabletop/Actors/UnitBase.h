@@ -9,6 +9,7 @@ class USphereComponent;
 class UStaticMeshComponent;
 class UStaticMesh;
 class ATabletopPlayerState;
+class UNiagaraSystem;
 
 UCLASS()
 class TABLETOP_API AUnitBase : public AActor
@@ -16,8 +17,7 @@ class TABLETOP_API AUnitBase : public AActor
     GENERATED_BODY()
 public:
     AUnitBase();
-
-
+    
     UFUNCTION(BlueprintCallable, BlueprintPure)
     void GetModelWorldLocations(TArray<FVector>& Out) const;
     
@@ -79,6 +79,42 @@ public:
     int32 GetToughness()    const { return ToughnessRep; }
     int32 GetWounds()       const { return WoundsRep; }
 
+    UFUNCTION(BlueprintCallable, Category="Facing")
+    void FaceNearestEnemyInstant();
+
+    UFUNCTION(BlueprintPure, Category="Facing")
+    AActor* FindNearestEnemyUnit(float MaxSearchDistCm = 100000.f) const;
+    bool FaceActorInstant(AActor* Target, float YawSnapDeg = 1.0f);
+
+    // --- VFX: simple "all models" volley ---
+    UPROPERTY(EditDefaultsOnly, Category="VFX")
+    class UNiagaraSystem* FX_Muzzle = nullptr;
+
+    UPROPERTY(EditDefaultsOnly, Category="VFX")
+    class UNiagaraSystem* FX_Impact = nullptr;
+
+    // Optional sockets/offsets
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="VFX")
+    FName MuzzleSocketName = "Muzzle";
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="VFX")
+    FVector MuzzleOffsetLocal = FVector(30, 0, 60);
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="VFX")
+    FName ImpactSocketName = "Impact";   // if your target mesh has one
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="VFX")
+    FVector ImpactOffsetLocal = FVector(0, 0, 40);
+
+    // Fire muzzle on every attacker model and impact on every target model.
+    // Keep it Unreliable (purely cosmetic).
+    UFUNCTION(NetMulticast, Unreliable)
+    void Multicast_PlayMuzzleAndImpactFX_AllModels(class AUnitBase* TargetUnit);
+
+    // (helpers)
+    UFUNCTION(BlueprintPure, Category="VFX")
+    FTransform GetMuzzleTransform(int32 ModelIndex) const;
+    
 protected:
     virtual void BeginPlay() override;
 
@@ -102,7 +138,17 @@ protected:
 
     // Grid settings
     UPROPERTY(EditDefaultsOnly, Category="Unit|Visual")
-    int32 GridColumns = 5;
+    int32 GridColumns = 3;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Formation", meta=(ClampMin="0.0"))
+    float ExtraSpacingCmX = 10.f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Formation", meta=(ClampMin="0.0"))
+    float ExtraSpacingCmY = 10.f;
+
+    // Per-unit BP override
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Formation", meta=(ClampMin="0.05", ClampMax="10.0"))
+    float ModelScale = 1.0f;
 
     UPROPERTY(EditDefaultsOnly, Category="Unit|Visual")
     float ModelSpacingCm = 30.f; // ~1.18 inches; tweak for your base sizes

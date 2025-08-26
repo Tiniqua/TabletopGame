@@ -1,9 +1,12 @@
 #include "UnitBase.h"
 
+#include "EngineUtils.h"
 #include "ObjectiveMarker.h"
 #include "Net/UnrealNetwork.h"
 #include "Components/SphereComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "NiagaraFunctionLibrary.h"
+#include "NiagaraComponent.h"
 #include "Tabletop/PlayerStates/TabletopPlayerState.h"
 
 AUnitBase::AUnitBase()
@@ -96,6 +99,84 @@ void AUnitBase::Server_InitFromRow(APlayerState* OwnerPS, const FUnitRow& Row, i
     RebuildFormation();
     ForceNetUpdate();
 }
+
+FTransform AUnitBase::GetMuzzleTransform(int32 ModelIndex) const
+{
+    if (!ModelMeshes.IsValidIndex(ModelIndex) || !ModelMeshes[ModelIndex])
+        return GetActorTransform();
+
+    UStaticMeshComponent* C = ModelMeshes[ModelIndex];
+
+    if (C->DoesSocketExist(MuzzleSocketName))
+    {
+        return C->GetSocketTransform(MuzzleSocketName, ERelativeTransformSpace::RTS_World);
+    }
+
+    const FTransform WT = C->GetComponentTransform();
+    const FVector   WLoc = WT.TransformPosition(MuzzleOffsetLocal);
+    return FTransform((WT.GetRotation()).Rotator(), WLoc, WT.GetScale3D());
+}
+
+void AUnitBase::Multicast_PlayMuzzleAndImpactFX_AllModels_Implementation(AUnitBase* TargetUnit)
+{
+    if (!FX_Muzzle && !FX_Impact) return;         // nothing to do
+    if (!IsValid(TargetUnit)) return;
+
+    // ---------- MUZZLES (attacker side) ----------
+    const FVector TargetCenter = TargetUnit->GetActorLocation();
+
+    for (int32 i = 0; i < ModelMeshes.Num(); ++i)
+    {
+        UStaticMeshComponent* C = ModelMeshes[i];
+        if (!IsValid(C)) continue;
+
+        const FTransform MuzzXform = GetMuzzleTransform(i);
+        const FVector MuzzLoc = MuzzXform.GetLocation();
+        const FRotator AimRot = (TargetCenter - MuzzLoc).Rotation();
+
+        if (FX_Muzzle)
+        {
+            UNiagaraFunctionLibrary::SpawnSystemAtLocation(
+                GetWorld(), FX_Muzzle, MuzzLoc, AimRot);
+        }
+    }
+
+    // ---------- IMPACTS (target side) ----------
+    // For each target model: pick an impact point (socket if present, else local offset),
+    // and orient along the incoming direction from the attacker.
+    const FVector AttackerCenter = GetActorLocation();
+
+    for (int32 j = 0; j < TargetUnit->ModelMeshes.Num(); ++j)
+    {
+        UStaticMeshComponent* TC = TargetUnit->ModelMeshes[j];
+        if (!IsValid(TC)) continue;
+
+        FVector ImpactLoc;
+        FRotator ImpactRot;
+
+        if (TC->DoesSocketExist(TargetUnit->ImpactSocketName))
+        {
+            const FTransform Sock = TC->GetSocketTransform(TargetUnit->ImpactSocketName, ERelativeTransformSpace::RTS_World);
+            ImpactLoc = Sock.GetLocation();
+        }
+        else
+        {
+            const FTransform WT = TC->GetComponentTransform();
+            ImpactLoc = WT.TransformPosition(TargetUnit->ImpactOffsetLocal);
+        }
+
+        // Face roughly against the incoming shot direction
+        const FVector InDir = (ImpactLoc - AttackerCenter).GetSafeNormal();
+        ImpactRot = InDir.Rotation();
+
+        if (FX_Impact)
+        {
+            UNiagaraFunctionLibrary::SpawnSystemAtLocation(
+                GetWorld(), FX_Impact, ImpactLoc, ImpactRot);
+        }
+    }
+}
+
 
 void AUnitBase::GetModelWorldLocations(TArray<FVector>& Out) const
 {
@@ -219,17 +300,14 @@ void AUnitBase::RebuildFormation()
 {
     const int32 Needed = FMath::Max(0, ModelsCurrent);
 
-    // Remove extra meshes
+    // Remove extras
     for (int32 i = ModelMeshes.Num() - 1; i >= Needed; --i)
     {
-        if (UStaticMeshComponent* C = ModelMeshes[i])
-        {
-            C->DestroyComponent();
-        }
+        if (UStaticMeshComponent* C = ModelMeshes[i]) { C->DestroyComponent(); }
         ModelMeshes.RemoveAt(i);
     }
 
-    // Add missing meshes
+    // Add missing
     while (ModelMeshes.Num() < Needed)
     {
         const FName CompName = *FString::Printf(TEXT("Model_%02d"), ModelMeshes.Num());
@@ -238,40 +316,82 @@ void AUnitBase::RebuildFormation()
         C->RegisterComponent();
         C->SetCanEverAffectNavigation(false);
         C->SetMobility(EComponentMobility::Movable);
-
-        if (ModelMesh)
-        {
-            C->SetStaticMesh(ModelMesh);
-        }
-
-        // Make selection outline respect the unit highlight toggle
+        if (ModelMesh) C->SetStaticMesh(ModelMesh);
         C->SetRenderCustomDepth(false);
-
+        C->SetRelativeScale3D(FVector(ModelScale));
         ModelMeshes.Add(C);
     }
 
-    // Position meshes in a simple grid (row-major)
+    if (ModelMeshes.Num() == 0) return;
+
+    // Derive footprint from mesh bounds (fallback if no mesh)
+    FVector Ext = FVector(50,50,50);
+    if (UStaticMesh* SM = ModelMeshes[0]->GetStaticMesh())
+        Ext = SM->GetBounds().BoxExtent;
+
+    const float CellX = (Ext.X * 2.f * ModelScale) + ExtraSpacingCmX;
+    const float CellY = (Ext.Y * 2.f * ModelScale) + ExtraSpacingCmY;
+
     if (GridColumns <= 0) GridColumns = 5;
-    const float Spacing = ModelSpacingCm;
+    const int32 Cols = FMath::Max(1, GridColumns);
+    const int32 Rows = FMath::CeilToInt(float(ModelMeshes.Num()) / float(Cols));
+
+    // Center the whole rectangle, not per-row
+    const float OriginX = -0.5f * (Cols - 1) * CellX;
+    const float OriginY = -0.5f * (Rows - 1) * CellY;
 
     for (int32 i = 0; i < ModelMeshes.Num(); ++i)
     {
-        const int32 Row = i / GridColumns;
-        const int32 Col = i % GridColumns;
-
-        // Center the formation around actor origin
-        const int32 CountInLastRow = (i == ModelMeshes.Num() - 1) ? ((ModelMeshes.Num() - 1) % GridColumns) + 1 : GridColumns;
-        const float TotalCols = (float)GridColumns;
-
-        // Horizontal offset (centered)
-        const float X = (Col - (TotalCols - 1) * 0.5f) * Spacing;
-        const float Y = (-Row) * Spacing; // move rows “back” (negative Y) to stack
-
+        const int32 Row = i / Cols;
+        const int32 Col = i % Cols;
+        const float X = OriginX + Col * CellX;
+        const float Y = OriginY - Row * CellY; // rows “back”
         if (UStaticMeshComponent* C = ModelMeshes[i])
         {
             C->SetRelativeLocation(FVector(X, Y, 0.f));
             C->SetRelativeRotation(FRotator::ZeroRotator);
+            C->SetRelativeScale3D(FVector(ModelScale));
         }
+    }
+}
+
+AActor* AUnitBase::FindNearestEnemyUnit(float MaxSearchDistCm) const
+{
+    AUnitBase* Best = nullptr;
+    float BestSq = MaxSearchDistCm * MaxSearchDistCm;
+    const FVector MyLoc = GetActorLocation();
+
+    for (TActorIterator<AUnitBase> It(GetWorld()); It; ++It)
+    {
+        AUnitBase* U = *It;
+        if (U == this || !U->IsActorInitialized()) continue;
+        if (U->OwningPS == OwningPS) continue; // same side
+        const float D2 = FVector::DistSquared(MyLoc, U->GetActorLocation());
+        if (D2 < BestSq) { BestSq = D2; Best = U; }
+    }
+    return Best;
+}
+
+bool AUnitBase::FaceActorInstant(AActor* Target, float YawSnapDeg)
+{
+    if (!Target) return false;
+    FVector Dir = Target->GetActorLocation() - GetActorLocation();
+    Dir.Z = 0.f;
+    if (Dir.IsNearlyZero()) return false;
+
+    const FRotator Desired = Dir.Rotation();
+    const float DeltaYaw = FMath::Abs(FMath::FindDeltaAngleDegrees(GetActorRotation().Yaw, Desired.Yaw));
+    if (DeltaYaw < YawSnapDeg) return false;
+
+    SetActorRotation(FRotator(0.f, Desired.Yaw, 0.f)); // relies on SetReplicateMovement(true)
+    return true;
+}
+
+void AUnitBase::FaceNearestEnemyInstant()
+{
+    if (AActor* Enemy = FindNearestEnemyUnit())
+    {
+        FaceActorInstant(Enemy);
     }
 }
 

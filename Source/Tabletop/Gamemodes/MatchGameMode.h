@@ -128,6 +128,7 @@ public:
 	void HandleStartBattle(class APlayerController* PC);
 	void HandleEndPhase(class APlayerController* PC);
 	void ScoreObjectivesForRound();
+	void NotifyUnitTransformChanged(AUnitBase* Changed);
 
 	void FinalizePlayerJoin(APlayerController* PC);
 	void TallyObjectives_EndOfRound();
