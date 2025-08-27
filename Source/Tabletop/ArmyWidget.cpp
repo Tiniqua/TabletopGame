@@ -9,7 +9,7 @@
 #include "GameFramework/PlayerState.h"
 #include "Gamemodes/SetupGamemode.h"
 
-namespace
+namespace FactionNameConverter
 {
     FString FactionDisplay(EFaction F)
     {
@@ -166,12 +166,12 @@ void UArmyWidget::BuildFactionDropdown()
     // Sort by display name
     TArray<EFaction> List = Seen.Array();
     List.Sort([](EFaction A, EFaction B) {
-        return FactionDisplay(A) < FactionDisplay(B);
+        return FactionNameConverter::FactionDisplay(A) < FactionNameConverter::FactionDisplay(B);
     });
 
     for (EFaction F : List)
     {
-        FactionDropdown->AddOption(FactionDisplay(F));
+        FactionDropdown->AddOption(FactionNameConverter::FactionDisplay(F));
     }
 }
 
@@ -186,8 +186,8 @@ void UArmyWidget::RefreshFromState()
     if (P1Name) P1Name->SetText(FText::FromString(N1));
     if (P2Name) P2Name->SetText(FText::FromString(N2));
 
-    if (P1PickText) P1PickText->SetText(FText::FromString(FactionDisplay(S->P1Faction)));
-    if (P2PickText) P2PickText->SetText(FText::FromString(FactionDisplay(S->P2Faction)));
+    if (P1PickText) P1PickText->SetText(FText::FromString(FactionNameConverter::FactionDisplay(S->P1Faction)));
+    if (P2PickText) P2PickText->SetText(FText::FromString(FactionNameConverter::FactionDisplay(S->P2Faction)));
 
     // Enable only your own Ready button
     const bool bLocalIsP1 = (LPC->PlayerState && LPC->PlayerState == S->Player1);
