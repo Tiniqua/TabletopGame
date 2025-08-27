@@ -56,6 +56,7 @@ void AUnitBase::Server_InitFromRow(APlayerState* OwnerPS, const FUnitRow& Row, i
         Faction = TPS->SelectedFaction;
     }
 
+    UnitName = Row.DisplayName;
     ModelsMax     = Row.Models;
     ModelsCurrent = ModelsMax;
 
@@ -527,6 +528,7 @@ void AUnitBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetim
     Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 
     DOREPLIFETIME(AUnitBase, UnitId);
+    DOREPLIFETIME(AUnitBase, UnitName);
     DOREPLIFETIME(AUnitBase, Faction);
     DOREPLIFETIME(AUnitBase, OwningPS);
     DOREPLIFETIME(AUnitBase, WeaponIndex);

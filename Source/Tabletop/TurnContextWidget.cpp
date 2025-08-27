@@ -296,7 +296,7 @@ void UTurnContextWidget::FillAttacker(AUnitBase* U)
     }
 
     if (AttackerNameText)
-        AttackerNameText->SetText(FText::FromName(U->UnitId));
+        AttackerNameText->SetText(U->UnitName);
 
     if (AttackerMembersText)
         AttackerMembersText->SetText(FText::FromString(FString::Printf(TEXT("%d / %d models"), U->ModelsCurrent, U->ModelsMax)));
@@ -315,7 +315,7 @@ void UTurnContextWidget::FillTarget(AUnitBase* U)
 {
     if (!U) { ClearTargetFields(); return; }
 
-    if (TargetNameText)    TargetNameText->SetText(FText::FromName(U->UnitId));
+    if (TargetNameText)    TargetNameText->SetText(U->UnitName);
     if (TargetMembersText) TargetMembersText->SetText(FText::FromString(FString::Printf(TEXT("%d / %d models"), U->ModelsCurrent, U->ModelsMax)));
     if (TargetToughText)   TargetToughText->SetText(FText::FromString(FString::Printf(TEXT("T: %d"), U->GetToughness())));
     if (TargetWoundsText)  TargetWoundsText->SetText(FText::FromString(FString::Printf(TEXT("W: %d"), U->GetWounds())));

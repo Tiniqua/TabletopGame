@@ -429,6 +429,7 @@ void AMatchGameMode::Handle_SelectTarget(AMatchPlayerController* PC, AUnitBase* 
     S->OnDeploymentChanged.Broadcast();
     S->ForceNetUpdate();
 }
+
 void AMatchGameMode::Handle_ConfirmShoot(AMatchPlayerController* PC, AUnitBase* Attacker, AUnitBase* Target)
 {
     if (!HasAuthority() || !PC || !Attacker || !Target) return;

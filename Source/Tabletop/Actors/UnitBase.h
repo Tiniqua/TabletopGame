@@ -38,6 +38,7 @@ public:
     // ---------- Runtime state (replicated) ----------
     UPROPERTY(ReplicatedUsing=OnRep_Models) int32 ModelsCurrent = 0;
     UPROPERTY(Replicated)                 int32 ModelsMax     = 0;
+    UPROPERTY(Replicated)                 FText UnitName;
 
     UPROPERTY(ReplicatedUsing=OnRep_Move) float MoveBudgetInches = 0.f;
     UPROPERTY(Replicated)                 float MoveMaxInches    = 0.f;
