@@ -1,5 +1,6 @@
 #include "TurnContextWidget.h"
 
+#include "LibraryHelpers.h"
 #include "Components/WidgetSwitcher.h"
 #include "Components/PanelWidget.h"
 #include "Components/Button.h"
@@ -9,26 +10,6 @@
 #include "Actors/UnitBase.h"
 #include "Gamemodes/MatchGameMode.h"   // EMatchPhase, ETurnPhase, AMatchGameState
 
-namespace
-{
-    inline float ProbAtLeast(int32 Need) {
-        if (Need <= 1) return 1.f;
-        if (Need >= 7) return 0.f;
-        return float(7 - Need) / 6.f;
-    }
-    inline int32 ToWoundTarget(int32 S, int32 T) {
-        if (S >= 2*T) return 2; if (S > T) return 3; if (S == T) return 4;
-        if (2*S <= T) return 6; return 5;
-    }
-    inline int32 ModifiedSaveNeed(int32 BaseSave, int32 AP) {
-        return FMath::Clamp(BaseSave + FMath::Max(0, AP), 2, 7);
-    }
-    inline const TCHAR* CoverTypeToText(ECoverType C) {
-        switch (C) { case ECoverType::Low: return TEXT("in cover (low)");
-        case ECoverType::High:return TEXT("in cover (high)");
-        default:               return TEXT("no cover"); }
-    }
-}
 
 
 AMatchGameState* UTurnContextWidget::GS() const
@@ -68,13 +49,13 @@ void UTurnContextWidget::UpdateCombatEstimates(AUnitBase* Attacker, AUnitBase* T
     // Same sign convention as your server code:
     // High cover sets HitMod=-1 → need increases by +1 (i.e., +(-HitMod))
     const int32 hitNeed  = FMath::Clamp(baseToHit + (HitMod * -1), 2, 6);
-    const int32 woundNeed= ToWoundTarget(sVal, tVal);
-    int32 saveNeed       = ModifiedSaveNeed(baseSave, ap);
+    const int32 woundNeed= CombatMath::ToWoundTarget(sVal, tVal);
+    int32 saveNeed       = CombatMath::ModifiedSaveNeed(baseSave, ap);
     saveNeed             = FMath::Clamp(saveNeed - SaveMod, 2, 7);
 
-    const float pHit   = ProbAtLeast(hitNeed);
-    const float pWound = ProbAtLeast(woundNeed);
-    const float pSave  = (saveNeed <= 6) ? ProbAtLeast(saveNeed) : 0.f;
+    const float pHit   = CombatMath::ProbAtLeast(hitNeed);
+    const float pWound = CombatMath::ProbAtLeast(woundNeed);
+    const float pSave  = (saveNeed <= 6) ? CombatMath::ProbAtLeast(saveNeed) : 0.f;
     const float pFail  = 1.f - pSave;
 
     const float pUnsavedPerAtk = pHit * pWound * pFail;
@@ -99,7 +80,7 @@ void UTurnContextWidget::UpdateCombatEstimates(AUnitBase* Attacker, AUnitBase* T
             FString::Printf(TEXT("Est. Dmg: %.1f"), evDamage)));
 
     if (CoverStatusText)
-        CoverStatusText->SetText(FText::FromString(CoverTypeToText(CoverType)));
+        CoverStatusText->SetText(FText::FromString(CombatMath::CoverTypeToText(CoverType)));
 }
 
 void UTurnContextWidget::NativeConstruct()
