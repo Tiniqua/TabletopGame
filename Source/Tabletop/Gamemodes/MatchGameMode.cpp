@@ -395,6 +395,10 @@ void AMatchGameMode::Handle_SelectTarget(AMatchPlayerController* PC, AUnitBase* 
             S->Preview.Target   = nullptr;
             S->Preview.Phase    = S->TurnPhase;
 
+            S->ActionPreview.HitMod   = 0;
+            S->ActionPreview.SaveMod  = 0;
+            S->ActionPreview.Cover    = ECoverType::None;
+
             // Optional: revert to nearest enemy when canceling
             Attacker->FaceNearestEnemyInstant();
         }
@@ -407,6 +411,17 @@ void AMatchGameMode::Handle_SelectTarget(AMatchPlayerController* PC, AUnitBase* 
     S->Preview.Attacker = Attacker;
     S->Preview.Target   = Target;
     S->Preview.Phase    = S->TurnPhase;
+
+    S->ActionPreview.Attacker = Attacker;
+    S->ActionPreview.Target   = Target;
+    S->ActionPreview.Phase    = S->TurnPhase;
+
+    int32 HitMod = 0, SaveMod = 0;
+    ECoverType Cover = ECoverType::None;
+    QueryCover(Attacker, Target, HitMod, SaveMod, Cover);
+    S->ActionPreview.HitMod  = static_cast<int8>(HitMod);
+    S->ActionPreview.SaveMod = static_cast<int8>(SaveMod);
+    S->ActionPreview.Cover   = Cover;
 
     // Face *the target* (not the nearest enemy)
     Attacker->FaceActorInstant(Target);

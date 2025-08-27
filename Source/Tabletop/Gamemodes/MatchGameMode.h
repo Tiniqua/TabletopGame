@@ -6,10 +6,11 @@
 #include "GameFramework/GameModeBase.h"
 #include "GameFramework/GameStateBase.h"
 #include "Net/UnrealNetwork.h"
+#include "Tabletop/Actors/CoverVolume.h"
 #include "MatchGameMode.generated.h"
 
 class ANetDebugTextActor;
-enum class ECoverType : uint8;
+
 class AMatchPlayerController;
 class AUnitBase;
 
@@ -49,6 +50,10 @@ struct FActionPreview
 	UPROPERTY() class AUnitBase* Attacker = nullptr;
 	UPROPERTY() class AUnitBase* Target   = nullptr;
 	UPROPERTY() ETurnPhase Phase = ETurnPhase::Move;
+
+	UPROPERTY() int8       HitMod   = 0;
+	UPROPERTY() int8       SaveMod  = 0;
+	UPROPERTY() ECoverType Cover    = ECoverType::None;
 };
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnDeploymentChanged);

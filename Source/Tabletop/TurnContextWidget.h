@@ -4,6 +4,7 @@
 #include "Blueprint/UserWidget.h"
 #include "TurnContextWidget.generated.h"
 
+enum class ECoverType : uint8;
 class UWidgetSwitcher;
 class UPanelWidget;
 class UButton;
@@ -58,6 +59,12 @@ protected:
     UPROPERTY(meta=(BindWidget)) UTextBlock* PrimaryActionLabel  = nullptr; // "Confirm"
     UPROPERTY(meta=(BindWidget)) UButton*    CancelBtn           = nullptr; // cancel target mode / preview
 
+    UPROPERTY(meta=(BindWidget)) UTextBlock* HitChanceText     = nullptr;
+    UPROPERTY(meta=(BindWidget)) UTextBlock* WoundChanceText   = nullptr;
+    UPROPERTY(meta=(BindWidget)) UTextBlock* SaveFailText      = nullptr;
+    UPROPERTY(meta=(BindWidget)) UTextBlock* EstDamageText     = nullptr;
+    UPROPERTY(meta=(BindWidget)) UTextBlock* CoverStatusText = nullptr;
+
     // ---------- Callbacks ----------
     UFUNCTION() void OnMatchChanged();
     UFUNCTION() void OnSelectedChanged(class AUnitBase* NewSel);
@@ -78,6 +85,14 @@ protected:
     void FillAttacker(class AUnitBase* U);
     void FillTarget(class AUnitBase* U);
     void ClearTargetFields();
+
+    void UpdateCombatEstimates(class AUnitBase* Attacker, class AUnitBase* Target);
+
+    void UpdateCombatEstimates(class AUnitBase* Attacker, class AUnitBase* Target,
+                           int32 HitMod, int32 SaveMod, ECoverType CoverType);
+
+    // Clear those fields (when no target / wrong phase)
+    void ClearEstimateFields();
 
     bool IsMyTurn() const;
 

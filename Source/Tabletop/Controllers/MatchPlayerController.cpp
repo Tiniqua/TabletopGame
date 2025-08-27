@@ -380,7 +380,6 @@ void AMatchPlayerController::Server_CancelPreview_Implementation(AUnitBase* Atta
 	}
 }
 
-
 void AMatchPlayerController::Server_ConfirmShoot_Implementation(AUnitBase* Attacker, AUnitBase* Target)
 {
 	if (AMatchGameMode* GM = GetWorld()->GetAuthGameMode<AMatchGameMode>())
