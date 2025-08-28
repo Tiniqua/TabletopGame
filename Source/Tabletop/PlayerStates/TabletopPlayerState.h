@@ -24,7 +24,7 @@ public:
 
 	UFUNCTION()
 	void OnRep_PlayerIdentity();
-
+	
 	UPROPERTY(ReplicatedUsing=OnRep_TeamNum, BlueprintReadOnly, Category="Match")
 	int32 TeamNum = 0;   // 0 = unset, 1 = team1, 2 = team2
 

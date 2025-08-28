@@ -71,6 +71,18 @@ static APlayerState* ResolveControllerPS(const AMatchGameState* S, const APlayer
     return nullptr;
 }
 
+ATabletopPlayerState* AMatchGameState::GetPSForTeam(int32 TeamNum) const
+{
+    if (P1 && P1->TeamNum == TeamNum) return P1;
+    if (P2 && P2->TeamNum == TeamNum) return P2;
+
+    // Optional: future-proof for >2 players
+    for (APlayerState* PS : PlayerArray)
+        if (auto* T = Cast<ATabletopPlayerState>(PS); T && T->TeamNum == TeamNum) return T;
+
+    return nullptr;
+}
+
 void AMatchGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
     Super::GetLifetimeReplicatedProps(OutLifetimeProps);
@@ -174,6 +186,7 @@ void AMatchGameState::BeginPlay()
     for (AActor* A : Found)
         if (auto* M = Cast<AObjectiveMarker>(A)) Objectives.Add(M);
 }
+
 
 void AMatchGameState::Multicast_DrawShotDebug_Implementation(const FVector& WorldLoc, const FString& Msg, FColor Color, float Duration)
 {
@@ -772,18 +785,25 @@ void AMatchGameMode::BeginPlay()
 void AMatchGameMode::PostLogin(APlayerController* NewPlayer)
 {
     Super::PostLogin(NewPlayer);
-    
+
     if (AMatchGameState* S = GS())
     {
-        if (!S->P1)      S->P1 = NewPlayer->PlayerState;
-        else if (!S->P2) S->P2 = NewPlayer->PlayerState;
+        ATabletopPlayerState* NewTPS = NewPlayer ? NewPlayer->GetPlayerState<ATabletopPlayerState>() : nullptr;
+        if (!NewTPS)
+        {
+            UE_LOG(LogTemp, Error, TEXT("PostLogin: PlayerState is not ATabletopPlayerState. "
+                                        "Make sure PlayerStateClass = ATabletopPlayerState in GameMode."));
+            return;
+        }
+
+        if (!S->P1)                    S->P1 = NewTPS;
+        else if (!S->P2 && S->P1 != NewTPS) S->P2 = NewTPS;
 
         S->OnDeploymentChanged.Broadcast();
         S->ForceNetUpdate();
     }
-    
-    FinalizePlayerJoin(NewPlayer); // leave the heavy init here
 
+    FinalizePlayerJoin(NewPlayer); // keep your flow
 }
 
 void AMatchGameMode::ResetUnitRoundStateFor(APlayerState* TurnOwner)
@@ -845,14 +865,8 @@ void AMatchGameMode::CopyRostersFromPlayerStates()
 {
     if (AMatchGameState* S = GS())
     {
-        S->P1Remaining.Empty();
-        S->P2Remaining.Empty();
-
-        if (auto* P1PS = Cast<ATabletopPlayerState>(S->P1))
-            S->P1Remaining = P1PS->Roster;
-
-        if (auto* P2PS = Cast<ATabletopPlayerState>(S->P2))
-            S->P2Remaining = P2PS->Roster;
+        S->P1Remaining = S->P1 ? S->P1->Roster : TArray<FUnitCount>{};
+        S->P2Remaining = S->P2 ? S->P2->Roster : TArray<FUnitCount>{};
     }
 }
 
@@ -1171,36 +1185,39 @@ void AMatchGameMode::ApplyDelayedDamageAndReport(AUnitBase* Attacker, AUnitBase*
 void AMatchGameMode::FinalizePlayerJoin(APlayerController* PC)
 {
     if (!PC) return;
+
     if (AMatchGameState* S = GS())
     {
-        // Make sure P1/P2 are set (idempotent)
-        if (!S->P1) S->P1 = PC->PlayerState;
-        else if (!S->P2 && S->P1 != PC->PlayerState) S->P2 = PC->PlayerState;
+        ATabletopPlayerState* TPS = PC->GetPlayerState<ATabletopPlayerState>();
+        if (!TPS)
+        {
+            UE_LOG(LogTemp, Error, TEXT("FinalizePlayerJoin: PlayerState is not ATabletopPlayerState."));
+            return;
+        }
 
-        // One-time init only when both present and not yet initialized
+        if (!S->P1)                    S->P1 = TPS;
+        else if (!S->P2 && S->P1 != TPS) S->P2 = TPS;
+
+        // One-time init once both present
         if (S->P1 && S->P2 && !S->bTeamsAndTurnsInitialized)
         {
-            // Copy rosters once
             CopyRostersFromPlayerStates();
 
-            // Randomize or keep your existing function:
             const bool bP1First = FMath::RandBool();
-            S->CurrentDeployer = bP1First ? S->P1 : S->P2;
+            S->CurrentDeployer = bP1First ? static_cast<APlayerState*>(S->P1)
+                                          : static_cast<APlayerState*>(S->P2);
 
-            if (ATabletopPlayerState* P1PS = Cast<ATabletopPlayerState>(S->P1))
-                P1PS->TeamNum = bP1First ? 1 : 2;
-            if (ATabletopPlayerState* P2PS = Cast<ATabletopPlayerState>(S->P2))
-                P2PS->TeamNum = bP1First ? 2 : 1;
+            S->P1->TeamNum = bP1First ? 1 : 2;
+            S->P2->TeamNum = bP1First ? 2 : 1;
 
             S->Phase = EMatchPhase::Deployment;
             S->bTeamsAndTurnsInitialized = true;
 
-            if (ATabletopPlayerState* P1PS = Cast<ATabletopPlayerState>(S->P1)) P1PS->ForceNetUpdate();
-            if (ATabletopPlayerState* P2PS = Cast<ATabletopPlayerState>(S->P2)) P2PS->ForceNetUpdate();
+            S->P1->ForceNetUpdate();
+            S->P2->ForceNetUpdate();
             S->ForceNetUpdate();
         }
 
-        // Let clients refresh UI when any of the replicated props land
         S->OnDeploymentChanged.Broadcast();
     }
 
@@ -1209,6 +1226,7 @@ void AMatchGameMode::FinalizePlayerJoin(APlayerController* PC)
         MPC->Client_KickUIRefresh();
     }
 }
+
 
 void AMatchGameMode::TallyObjectives_EndOfRound()
 {

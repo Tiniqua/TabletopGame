@@ -9,6 +9,7 @@
 #include "Tabletop/Actors/CoverVolume.h"
 #include "MatchGameMode.generated.h"
 
+class ATabletopPlayerState;
 class ANetDebugTextActor;
 
 class AMatchPlayerController;
@@ -71,6 +72,9 @@ public:
 	UPROPERTY(ReplicatedUsing=OnRep_Match)
 	FCombatPreview Preview;
 	UFUNCTION() void OnRep_Match(){ OnDeploymentChanged.Broadcast(); }
+
+	UFUNCTION(BlueprintPure, Category="Teams")
+	ATabletopPlayerState* GetPSForTeam(int32 TeamNum) const;
 	
 	UPROPERTY(Replicated)
 	bool bTeamsAndTurnsInitialized = false;
@@ -105,8 +109,10 @@ public:
 	UPROPERTY(ReplicatedUsing=OnRep_Deployment) bool bDeploymentComplete = false;
 
 	// For quick name/faction display
-	UPROPERTY(ReplicatedUsing=OnRep_Players) APlayerState* P1 = nullptr;
-    UPROPERTY(ReplicatedUsing=OnRep_Players) APlayerState* P2 = nullptr;
+	UPROPERTY(ReplicatedUsing=OnRep_Players)
+	ATabletopPlayerState* P1 = nullptr;
+    UPROPERTY(ReplicatedUsing=OnRep_Players)
+	ATabletopPlayerState* P2 = nullptr;
 
 	UPROPERTY(BlueprintAssignable) FOnDeploymentChanged OnDeploymentChanged;
 

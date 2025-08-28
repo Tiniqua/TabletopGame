@@ -161,9 +161,7 @@ FString ADeploymentZone::OwnerDisplayText() const
 {
     UWorld* W = GetWorld();
     if (!W) return TEXT("Deploy: —");
-
-    const AMatchGameState* S = W->GetGameState<AMatchGameState>();
-
+    
     auto Cap8 = [](const FString& In)->FString
     {
         const int32 Max = 8;
@@ -171,6 +169,7 @@ FString ADeploymentZone::OwnerDisplayText() const
         return (Trimmed.Len() > Max) ? Trimmed.Left(Max) : Trimmed;
     };
 
+    const AMatchGameState* S = GetWorld() ? GetWorld()->GetGameState<AMatchGameState>() : nullptr;
     auto Nice = [&](APlayerState* PS)->FString
     {
         if (!PS) return TEXT("---");
@@ -194,8 +193,9 @@ FString ADeploymentZone::OwnerDisplayText() const
 
     switch (CurrentOwner)
     {
-    case EDeployOwner::Team1: return FString::Printf(TEXT("Deploy: %s"), *Nice(S ? S->P1 : nullptr));
-    case EDeployOwner::Team2: return FString::Printf(TEXT("Deploy: %s"), *Nice(S ? S->P2 : nullptr));
+    case EDeployOwner::Team1: return FString::Printf(TEXT("Deploy: %s"), *Nice(S ? S->GetPSForTeam(1) : nullptr));
+    case EDeployOwner::Team2: return FString::Printf(TEXT("Deploy: %s"), *Nice(S ? S->GetPSForTeam(2) : nullptr));
+
     default:                  return TEXT("Deploy: Either side");
     }
 }
