@@ -15,6 +15,7 @@ class TABLETOP_API UMenuWidget : public UUserWidget
 
 public:
     virtual void NativeConstruct() override;
+    virtual void NativeDestruct() override;
 
     /** Open the given map as a listen server using a level name or full asset path. */
     UFUNCTION(BlueprintCallable, Category="Networking")
@@ -35,6 +36,12 @@ public:
     /** Default IP:Port if there is no IP text box present or it is empty */
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Networking")
     FString DefaultJoinAddress = TEXT("127.0.0.1:7777");
+
+    void HandleJoinTimeout();
+    FTimerHandle JoinTimeoutHandle;
+
+    UPROPERTY(EditAnywhere, Category="Networking")
+    float JoinTimeoutSeconds = 10.f;
 
     /** If true, try CreateSession (LAN by default) then open map as listen on success.
         If false, host just directly opens the map with ?listen. */
@@ -62,6 +69,22 @@ public:
 
     UFUNCTION(BlueprintCallable, Category="Networking")
     void SetHostLevel(ULevel* InLevel) { HostLevelOverride = InLevel; }
+    
+    void HandleTravelFailure(UWorld* World, ETravelFailure::Type Type, const FString& ErrorString);
+    
+    void HandleNetworkFailure(UWorld* World, UNetDriver* NetDriver, ENetworkFailure::Type Type, const FString& ErrorString);
+
+    UFUNCTION()
+    void SetJoinFailText(const FString& FriendlyMessage);
+    UFUNCTION()
+    static FString FriendlyTravelText(ETravelFailure::Type Type, const FString& Reason);
+    UFUNCTION()
+    static FString FriendlyNetworkText(ENetworkFailure::Type Type, const FString& Reason);
+
+    // Remember what user tried so we can suggest it back
+    FString LastJoinAttempt;
+
+    static constexpr int32 kPort = 7777;
 
 protected:
     /** Bound buttons (must be named exactly in the BP: HostButton, JoinButton, QuitButton) */

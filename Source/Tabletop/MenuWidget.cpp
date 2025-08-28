@@ -5,7 +5,7 @@
 #include "Components/EditableTextBox.h"
 #include "Kismet/GameplayStatics.h"
 #include "Kismet/KismetSystemLibrary.h"
-
+#include "Engine/EngineBaseTypes.h"
 #include "OnlineSubsystem.h"
 #include "Interfaces/OnlineSessionInterface.h"
 #include "OnlineSessionSettings.h"
@@ -37,6 +37,26 @@ void UMenuWidget::NativeConstruct()
     if (HostButton) HostButton->OnClicked.AddDynamic(this, &UMenuWidget::OnHostClicked);
     if (JoinButton) JoinButton->OnClicked.AddDynamic(this, &UMenuWidget::OnJoinClicked);
     if (QuitButton) QuitButton->OnClicked.AddDynamic(this, &UMenuWidget::OnQuitClicked);
+
+    if (GEngine)
+    {
+        GEngine->OnNetworkFailure().AddUObject(this, &UMenuWidget::HandleNetworkFailure);
+        GEngine->OnTravelFailure().AddUObject(this, &UMenuWidget::HandleTravelFailure);
+    }
+}
+
+void UMenuWidget::NativeDestruct()
+{
+    if (GEngine)
+    {
+        GEngine->OnTravelFailure().RemoveAll(this);
+        GEngine->OnNetworkFailure().RemoveAll(this);
+    }
+    if (UWorld* W = GetWorld())
+    {
+        W->GetTimerManager().ClearTimer(JoinTimeoutHandle);
+    }
+    Super::NativeDestruct();
 }
 
 void UMenuWidget::OpenAsListen_ByLevel(ULevel* Level)
@@ -98,6 +118,7 @@ void UMenuWidget::OpenAsListen_ByWorld(TSoftObjectPtr<UWorld> MapAsset)
 }
 
 
+
 void UMenuWidget::OpenAsListen_ByName(const FString& LevelNameOrPath)
 {
     if (UWorld* World = GetWorld())
@@ -105,7 +126,15 @@ void UMenuWidget::OpenAsListen_ByName(const FString& LevelNameOrPath)
         const FName MapName = NormalizeLevelName(LevelNameOrPath);
         if (!MapName.IsNone())
         {
-            UGameplayStatics::OpenLevel(World, MapName, true, TEXT("listen"));
+            const FString Opts = FString::Printf(TEXT("listen?Port=%d"), kPort);
+            UGameplayStatics::OpenLevel(World, MapName, /*bAbsolute*/true, Opts);
+            if (UWorld* W = GetWorld())
+            {
+                if (UNetDriver* ND = W->GetNetDriver())
+                {
+                    UE_LOG(LogNet, Log, TEXT("Listening at %s"), *ND->LowLevelGetNetworkNumber()); // shows ip:port
+                }
+            }   
         }
     }
 }
@@ -152,11 +181,100 @@ void UMenuWidget::OnHostClicked()
 
 void UMenuWidget::OnJoinClicked()
 {
-    APlayerController* PC = GetOwningPlayer();
-    if (!PC) { return; }
+    if (APlayerController* PC = GetOwningPlayer())
+    {
+        FString Addr = ResolveJoinAddress().TrimStartAndEnd();
+        if (!Addr.Contains(TEXT(":")))
+        {
+            Addr += FString::Printf(TEXT(":%d"), kPort);
+        }
 
-    const FString Address = ResolveJoinAddress();
-    PC->ClientTravel(Address, TRAVEL_Absolute);
+        LastJoinAttempt = Addr;
+
+        if (EditText)
+        {
+            EditText->SetText(FText::FromString(FString::Printf(TEXT("%s (connecting…)"), *Addr)));
+        }
+        if (JoinButton) { JoinButton->SetIsEnabled(false); } // optional
+
+        UE_LOG(LogTemp, Log, TEXT("ClientTravel to %s"), *Addr);
+        PC->ClientTravel(Addr, TRAVEL_Absolute);
+
+        if (UWorld* W = GetWorld())
+        {
+            W->GetTimerManager().ClearTimer(JoinTimeoutHandle);
+            W->GetTimerManager().SetTimer(
+                JoinTimeoutHandle, this, &UMenuWidget::HandleJoinTimeout, JoinTimeoutSeconds, false);
+        }
+    }
+}
+
+void UMenuWidget::HandleJoinTimeout()
+{
+    SetJoinFailText(FString::Printf(TEXT("Timed out after %.0fs"), JoinTimeoutSeconds));
+    if (UWorld* W = GetWorld())
+    {
+        W->GetTimerManager().ClearTimer(JoinTimeoutHandle);
+    }
+}
+
+void UMenuWidget::HandleTravelFailure(UWorld* /*World*/, ETravelFailure::Type Type, const FString& ErrorString)
+{
+    const FString Msg = FriendlyTravelText(Type, ErrorString);
+    SetJoinFailText(Msg);
+}
+
+void UMenuWidget::HandleNetworkFailure(UWorld* /*World*/, UNetDriver* /*NetDriver*/, ENetworkFailure::Type Type, const FString& ErrorString)
+{
+    const FString Msg = FriendlyNetworkText(Type, ErrorString);
+    SetJoinFailText(Msg);
+}
+
+void UMenuWidget::SetJoinFailText(const FString& FriendlyMessage)
+{
+    if (EditText)
+    {
+        // Keep it single-line and useful
+        const FString Short = FriendlyMessage.Replace(TEXT("\n"), TEXT(" "));
+        const FString TextToShow = FString::Printf(TEXT("Join failed: %s | Try: %s"), *Short, *LastJoinAttempt);
+        EditText->SetText(FText::FromString(TextToShow));
+        EditText->SetKeyboardFocus(); // bring caret back, optional
+    }
+    if (JoinButton) { JoinButton->SetIsEnabled(true); }
+}
+
+// === Friendly text mappers ===
+FString UMenuWidget::FriendlyTravelText(ETravelFailure::Type Type, const FString& Reason)
+{
+    switch (Type)
+    {
+        case ETravelFailure::NoLevel:                return TEXT("Invalid URL or map");
+        case ETravelFailure::LoadMapFailure:         return TEXT("Server failed to load map");
+        case ETravelFailure::InvalidURL:             return TEXT("Invalid address");
+        case ETravelFailure::PackageVersion:         return TEXT("Version mismatch");
+        case ETravelFailure::PendingNetGameCreateFailure:
+                                                     return TEXT("Server unreachable / timed out");
+        case ETravelFailure::TravelFailure:          return TEXT("Travel failure");
+
+        default:                                     return Reason.IsEmpty() ? TEXT("Travel error") : Reason;
+    }
+}
+
+FString UMenuWidget::FriendlyNetworkText(ENetworkFailure::Type Type, const FString& Reason)
+{
+    switch (Type)
+    {
+        case ENetworkFailure::ConnectionLost:            return TEXT("Connection lost");
+        case ENetworkFailure::ConnectionTimeout:         return TEXT("Connection timed out");
+        case ENetworkFailure::FailureReceived:           return TEXT("Connection refused");
+        case ENetworkFailure::PendingConnectionFailure:  return TEXT("Server unreachable");
+        case ENetworkFailure::NetGuidMismatch:           return TEXT("Version/content mismatch");
+        case ENetworkFailure::NetChecksumMismatch:       return TEXT("Checksum mismatch");
+        case ENetworkFailure::NetDriverAlreadyExists:    return TEXT("Net driver already exists");
+        case ENetworkFailure::OutdatedClient:            return TEXT("Client is outdated");
+        case ENetworkFailure::OutdatedServer:            return TEXT("Server is outdated");
+        default:                                         return Reason.IsEmpty() ? TEXT("Network error") : Reason;
+    }
 }
 
 void UMenuWidget::OnQuitClicked()
@@ -168,7 +286,7 @@ void UMenuWidget::OnQuitClicked()
 
 void UMenuWidget::OpenLobbyAsListen()
 {
-    // Priority: 1) ULevel* override, 2) soft UWorld asset, 3) string path
+    //Priority: 1) ULevel* override, 2) soft UWorld asset, 3) string path
     if (HostLevelOverride)
     {
         OpenAsListen_ByLevel(HostLevelOverride);

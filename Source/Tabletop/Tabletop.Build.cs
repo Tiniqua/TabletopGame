@@ -17,7 +17,8 @@ public class Tabletop : ModuleRules
 				"UMG",
 				"Slate",
 				"SlateCore",
-				"Niagara"
+				"Niagara",
+				"NetCore"
 			});
 		
 		PrivateDependencyModuleNames.AddRange(new string[] {

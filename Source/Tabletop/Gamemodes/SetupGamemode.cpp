@@ -2,6 +2,7 @@
 #include "SetupGamemode.h"
 
 #include "GameFramework/PlayerState.h"
+#include "GameFramework/SpectatorPawn.h"
 #include "Tabletop/MapData.h"
 #include "Tabletop/PlayerStates/TabletopPlayerState.h"
 
@@ -106,6 +107,8 @@ ASetupGamemode::ASetupGamemode()
     PlayerStateClass   = ATabletopPlayerState::StaticClass();
     GameStateClass = ASetupGameState::StaticClass();
     bUseSeamlessTravel = true;
+    DefaultPawnClass = ASpectatorPawn::StaticClass();
+    bStartPlayersAsSpectators = true;
 }
 
 void ASetupGamemode::BeginPlay()
