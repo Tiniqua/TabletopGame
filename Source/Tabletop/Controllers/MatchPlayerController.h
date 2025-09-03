@@ -36,6 +36,12 @@ public:
 	UFUNCTION(Client, Reliable)
 	void Client_OnMoveDenied_OverBudget(class AUnitBase* Unit, float AttemptTTIn, float BudgetTTIn);
 
+	UFUNCTION(Server, Reliable)
+	void Server_RequestAdvance(AUnitBase* Unit);
+
+	UFUNCTION(Client, Reliable)
+	void Client_OnAdvanced(AUnitBase* Unit, int32 BonusInches);
+
 
 	// Expose helpers for the widget to call
 	UFUNCTION(BlueprintCallable) void EnterTargetMode() { bTargetMode = true; }
@@ -86,6 +92,9 @@ public:
 
 	UFUNCTION(Client, Reliable)
 	void Client_KickPhaseRefresh();
+
+	UFUNCTION(Client, Reliable)
+	void Client_ClearSelectionAfterConfirm();
 	
 	virtual void EndPlay(EEndPlayReason::Type Reason) override;
 	

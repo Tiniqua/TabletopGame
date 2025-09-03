@@ -9,6 +9,7 @@ class UTextBlock;
 class UButton;
 class AMatchGameState;
 class AMatchPlayerController;
+class UTurnContextWidget;
 
 UCLASS()
 class TABLETOP_API UGameplayWidget : public UUserWidget
@@ -27,7 +28,11 @@ protected:
 
 	void RefreshTopBar();
 	void RefreshBottom();
-
+	void UpdateTurnContextVisibility();
+	UFUNCTION()
+	void OnSelectedChanged(class AUnitBase* NewSel);
+	UPROPERTY(meta=(BindWidgetOptional))
+	UTurnContextWidget* TurnContext = nullptr;
 public:
 	// Top-left (P1)
 	UPROPERTY(meta=(BindWidget)) UTextBlock* P1Name = nullptr;
@@ -50,4 +55,5 @@ public:
 
 private:
 	TWeakObjectPtr<AMatchGameState> BoundGS;
+	TWeakObjectPtr<AMatchPlayerController> BoundPC;
 };

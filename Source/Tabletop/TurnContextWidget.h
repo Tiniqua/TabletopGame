@@ -29,6 +29,9 @@ public:
     virtual void NativeConstruct() override;
     virtual void NativeDestruct() override;
 
+    UPROPERTY(meta=(BindWidgetOptional)) UButton*   AdvanceBtn   = nullptr;
+    UPROPERTY(meta=(BindWidgetOptional)) UTextBlock* AdvanceLabel = nullptr;
+
 protected:
     // ---------- Bindings (assign in UMG) ----------
     UPROPERTY(meta=(BindWidget)) UWidgetSwitcher* PhaseSwitcher = nullptr;
@@ -59,6 +62,10 @@ protected:
     UPROPERTY(meta=(BindWidget)) UButton*    PrimaryActionBtn    = nullptr; // Confirm
     UPROPERTY(meta=(BindWidget)) UTextBlock* PrimaryActionLabel  = nullptr; // "Confirm"
     UPROPERTY(meta=(BindWidget)) UButton*    CancelBtn           = nullptr; // cancel target mode / preview
+
+    
+
+    UFUNCTION() void OnAdvanceClicked();
 
     UPROPERTY(meta=(BindWidget)) UTextBlock* HitChanceText     = nullptr;
     UPROPERTY(meta=(BindWidget)) UTextBlock* WoundChanceText   = nullptr;

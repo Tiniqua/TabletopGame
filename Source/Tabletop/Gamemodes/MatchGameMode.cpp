@@ -680,6 +680,11 @@ void AMatchGameMode::Handle_ConfirmShoot(AMatchPlayerController* PC, AUnitBase* 
         S->Preview.Phase    = S->TurnPhase;
     }
 
+    if (IsValid(PC))
+    {
+        PC->Client_ClearSelectionAfterConfirm();
+    }
+
     S->OnDeploymentChanged.Broadcast();
     S->ForceNetUpdate();
 }
@@ -1267,6 +1272,37 @@ void AMatchGameMode::NotifyUnitTransformChanged(AUnitBase* Changed)
         {
             U->FaceNearestEnemyInstant();
         }
+    }
+}
+
+void AMatchGameMode::Handle_AdvanceUnit(AMatchPlayerController* PC, AUnitBase* Unit)
+{
+    if (!HasAuthority() || !PC || !Unit) return;
+
+    AMatchGameState* S = GS();
+    if (!S || S->Phase != EMatchPhase::Battle || S->TurnPhase != ETurnPhase::Move) return;
+    if (PC->PlayerState != S->CurrentTurn) return;
+    if (Unit->OwningPS != PC->PlayerState) return;
+    if (Unit->bAdvancedThisTurn) return; // already advanced
+
+    // Roll bonus in [1 .. MoveMaxInches] (integers)
+    const int32 Max = FMath::Max(1, (int32)FMath::RoundToInt(Unit->MoveMaxInches));
+    const int32 Bonus = FMath::RandRange(1, Max);
+
+    Unit->MoveBudgetInches += (float)Bonus;
+    Unit->bAdvancedThisTurn = true;
+    Unit->ForceNetUpdate();
+
+    if (AMatchGameState* S2 = GS())
+    {
+        S2->Multicast_ScreenMsg(
+            FString::Printf(TEXT("%s advanced +%d\""), *Unit->GetName(), Bonus),
+            FColor::Cyan, 3.f);
+    }
+
+    if (IsValid(PC))
+    {
+        PC->Client_OnAdvanced(Unit, Bonus);
     }
 }
 

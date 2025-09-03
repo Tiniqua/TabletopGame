@@ -166,6 +166,7 @@ public:
 	void HandleEndPhase(class APlayerController* PC);
 	void ScoreObjectivesForRound();
 	void NotifyUnitTransformChanged(AUnitBase* Changed);
+	void Handle_AdvanceUnit(AMatchPlayerController* PC, AUnitBase* Unit);
 
 	UFUNCTION()
 	void ApplyDelayedDamageAndReport(AUnitBase* Attacker, AUnitBase* Target, int32 TotalDamage, FVector DebugMid, FString DebugMsg);

@@ -1,14 +1,23 @@
 
 #include "GameplayWidget.h"
 
+#include "TurnContextWidget.h"
+#include "Blueprint/WidgetTree.h"
 #include "Components/Button.h"
 #include "Components/TextBlock.h"
 #include "Controllers/MatchPlayerController.h"
 #include "Gamemodes/MatchGameMode.h"
 #include "PlayerStates/TabletopPlayerState.h"
 
-AMatchGameState* UGameplayWidget::GS() const { return GetWorld()? GetWorld()->GetGameState<AMatchGameState>() : nullptr; }
-AMatchPlayerController* UGameplayWidget::MPC() const { return GetOwningPlayer<AMatchPlayerController>(); }
+AMatchGameState* UGameplayWidget::GS() const
+{
+    return GetWorld() ? GetWorld()->GetGameState<AMatchGameState>() : nullptr;
+}
+
+AMatchPlayerController* UGameplayWidget::MPC() const
+{
+    return GetOwningPlayer<AMatchPlayerController>();
+}
 
 void UGameplayWidget::NativeConstruct()
 {
@@ -20,10 +29,27 @@ void UGameplayWidget::NativeConstruct()
         BoundGS = S;
     }
 
-    if (NextBtn) NextBtn->OnClicked.AddDynamic(this, &UGameplayWidget::OnNextClicked);
+    if (AMatchPlayerController* P = MPC())
+    {
+        P->OnSelectedChanged.AddDynamic(this, &UGameplayWidget::OnSelectedChanged);
+        BoundPC = P;
+    }
 
+    if (!TurnContext && WidgetTree)
+    {
+        // If you named it in WBP, you can GetWidgetFromName(TEXT("TurnContext"))
+        if (UWidget* W = WidgetTree->FindWidget(TEXT("TurnContext")))
+        {
+            TurnContext = Cast<UTurnContextWidget>(W);
+        }
+    }
+    
+    // Initial state
+    UpdateTurnContextVisibility();
     RefreshTopBar();
     RefreshBottom();
+
+    if (NextBtn) NextBtn->OnClicked.AddDynamic(this, &UGameplayWidget::OnNextClicked);
 }
 
 void UGameplayWidget::NativeDestruct()
@@ -33,13 +59,40 @@ void UGameplayWidget::NativeDestruct()
         BoundGS->OnDeploymentChanged.RemoveDynamic(this, &UGameplayWidget::OnMatchChanged);
         BoundGS.Reset();
     }
+    if (BoundPC.IsValid())
+    {
+        BoundPC->OnSelectedChanged.RemoveDynamic(this, &UGameplayWidget::OnSelectedChanged);
+        BoundPC.Reset();
+    }
     Super::NativeDestruct();
 }
 
 void UGameplayWidget::OnMatchChanged()
 {
+    UpdateTurnContextVisibility();
     RefreshTopBar();
     RefreshBottom();
+}
+
+void UGameplayWidget::OnSelectedChanged(AUnitBase* /*NewSel*/)
+{
+    // Straightforward: visible only if a unit is selected and we’re in Battle
+    UpdateTurnContextVisibility();
+}
+
+void UGameplayWidget::UpdateTurnContextVisibility()
+{
+    if (!TurnContext) return;
+
+    const AMatchGameState* S = GS();
+    const AMatchPlayerController* P = MPC();
+
+    const bool bBattle = (S && S->Phase == EMatchPhase::Battle);
+    const bool bHasSel = (P && P->SelectedUnit != nullptr);
+
+    // Visible iff battle + a unit selected; else collapse it
+    TurnContext->SetVisibility((bBattle && bHasSel) ? ESlateVisibility::Visible
+                                                    : ESlateVisibility::Collapsed);
 }
 
 static FString NiceName(APlayerState* PS)

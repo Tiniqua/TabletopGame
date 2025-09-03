@@ -3,10 +3,13 @@
 
 
 #include "EngineUtils.h"
+#include "Components/Button.h"
+#include "Components/TextBlock.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerStart.h"
 #include "Tabletop/LibraryHelpers.h"
+#include "Tabletop/TurnContextWidget.h"
 #include "Tabletop/Actors/UnitBase.h"
 #include "Tabletop/Gamemodes/MatchGameMode.h"
 
@@ -225,6 +228,30 @@ void AMatchPlayerController::Client_OnMoveDenied_OverBudget_Implementation(AUnit
 #endif
 }
 
+void AMatchPlayerController::Server_RequestAdvance_Implementation(AUnitBase* Unit)
+{
+	if (AMatchGameMode* GM = GetWorld()->GetAuthGameMode<AMatchGameMode>())
+	{
+		GM->Handle_AdvanceUnit(this, Unit);
+	}
+}
+
+void AMatchPlayerController::Client_OnAdvanced_Implementation(AUnitBase* Unit, int32 BonusInches)
+{
+	// Update UI label nicely
+	if (UTurnContextWidget* W = /* however you obtain your HUD widget */ nullptr)
+	{
+		if (W->AdvanceLabel)
+		{
+			W->AdvanceLabel->SetText(FText::FromString(
+				FString::Printf(TEXT("+%d inches"), BonusInches)));
+		}
+		if (W->AdvanceBtn)
+		{
+			W->AdvanceBtn->SetIsEnabled(false);
+		}
+	}
+}
 
 bool AMatchPlayerController::TraceDeployLocation(FHitResult& OutHit) const
 {
@@ -331,6 +358,11 @@ void AMatchPlayerController::Client_KickPhaseRefresh_Implementation()
 	OnPhaseSignalChanged();
 }
 
+void AMatchPlayerController::Client_ClearSelectionAfterConfirm_Implementation()
+{
+	ClearSelection();
+	ExitTargetMode();
+}
 
 void AMatchPlayerController::EndPlay(const EEndPlayReason::Type Reason)
 {

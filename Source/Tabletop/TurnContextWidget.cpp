@@ -12,7 +12,29 @@
 #include "Actors/UnitBase.h"
 #include "Gamemodes/MatchGameMode.h"   // EMatchPhase, ETurnPhase, AMatchGameState
 
+struct FEffectiveUnitFlags
+{
+    bool  bCanShootAfterAdvance = false;
+    float MoveBudgetEffective   = 0.f;
+};
 
+static FEffectiveUnitFlags BuildEffective(const AUnitBase* Sel)
+{
+    FEffectiveUnitFlags E{};
+    if (!Sel) return E;
+
+    E.MoveBudgetEffective = Sel->MoveBudgetInches;
+
+    // Weapon permission (Assault)
+    const FWeaponProfile& W = Sel->GetActiveWeaponProfile();
+    E.bCanShootAfterAdvance = UWeaponKeywordHelpers::HasKeyword(W, EWeaponKeyword::Assault);
+
+    // Mods may also set similar permission (if you introduce such a flag in Mods)
+    // Example: if you decide to provide bCanShootAfterAdvance in FRollModifiers or a separate tag,
+    // read and OR it here.
+
+    return E;
+}
 
 AMatchGameState* UTurnContextWidget::GS() const
 {
@@ -119,6 +141,7 @@ void UTurnContextWidget::NativeConstruct()
     if (SelectTargetBtn)  SelectTargetBtn->OnClicked.AddDynamic(this, &UTurnContextWidget::OnSelectTargetClicked);
     if (PrimaryActionBtn) PrimaryActionBtn->OnClicked.AddDynamic(this, &UTurnContextWidget::OnPrimaryActionClicked);
     if (CancelBtn)        CancelBtn->OnClicked.AddDynamic(this, &UTurnContextWidget::OnCancelClicked);
+    if (AdvanceBtn) AdvanceBtn->OnClicked.AddDynamic(this, &UTurnContextWidget::OnAdvanceClicked);
 
     Refresh();
 }
@@ -215,7 +238,19 @@ void UTurnContextWidget::ShowShootPhase(AUnitBase* Sel)
         const int32 SaveMod = S->ActionPreview.SaveMod;
         const ECoverType Cover = S->ActionPreview.Cover;
 
-        UpdateCombatEstimates(Sel, S->Preview.Target, HitMod, SaveMod, Cover);
+        FRollModifiers AttackerHitMods  = Sel->CollectStageMods(ECombatEvent::PreHitCalc, true,  S->Preview.Target);
+        FRollModifiers AttackerSaveMods = Sel->CollectStageMods(ECombatEvent::PreSavingThrows, true,  S->Preview.Target);
+
+        // If you also model target-side mods when being attacked:
+        FRollModifiers TargetHitMods    = S->Preview.Target ? S->Preview.Target->CollectStageMods(ECombatEvent::PreHitCalc, false, Sel) : FRollModifiers{};
+        FRollModifiers TargetSaveMods   = S->Preview.Target ? S->Preview.Target->CollectStageMods(ECombatEvent::PreSavingThrows, false, Sel) : FRollModifiers{};
+
+        // Compose into the preview values coming from the server (HitMod/SaveMod)
+        const int32 HitModTotal  = HitMod  + AttackerHitMods.HitNeedOffset  + TargetHitMods.HitNeedOffset;
+        const int32 SaveModTotal = SaveMod + (AttackerSaveMods.bIgnoreCover ? 1 : 0) + (TargetSaveMods.bIgnoreCover ? -1 : 0);
+        // ^ adjust this to your sign conventions; the idea is: fold the booleans/offsets into the display
+
+        UpdateCombatEstimates(Sel, S->Preview.Target, HitModTotal, SaveModTotal, Cover);
 
         TArray<FKeywordUIInfo> Infos;
         UWeaponKeywordHelpers::BuildKeywordUIInfos(Sel, S->Preview.Target, HitMod, SaveMod, Infos);
@@ -227,13 +262,26 @@ void UTurnContextWidget::ShowShootPhase(AUnitBase* Sel)
         if (KeywordPanel) KeywordPanel->ClearChildren();
     }
 
-    const bool bCanShoot = bMine && Sel && !Sel->bHasShot;
-    if (SelectTargetBtn) SelectTargetBtn->SetIsEnabled(bCanShoot && !bPreviewForMe);
-    SetPrimary(TEXT("Confirm"), bCanShoot && bPreviewForMe);
-    if (CancelBtn)       CancelBtn->SetIsEnabled(bMine && (P->bTargetMode || bPreviewForMe));
+    if(Sel)
+    {
+        const bool bCanShootBase = bMine && Sel && !Sel->bHasShot;
+
+        const auto Eff = BuildEffective(Sel);
+        const bool bBlockedByAdvance = Sel->bAdvancedThisTurn && !Eff.bCanShootAfterAdvance;
+
+        const bool bCanShoot = bCanShootBase && !bBlockedByAdvance;
+
+        if (SelectTargetBtn) SelectTargetBtn->SetIsEnabled(bCanShoot && !bPreviewForMe);
+        SetPrimary(TEXT("Confirm"), bCanShoot && bPreviewForMe);
+        if (CancelBtn)       CancelBtn->SetIsEnabled(bMine && (P->bTargetMode || bPreviewForMe));
+
+        // Optional: show a hint that advancing blocked shooting
+        if (bBlockedByAdvance && PrimaryActionLabel)
+        {
+            PrimaryActionLabel->SetText(FText::FromString(TEXT("Cannot shoot: advanced")));
+        }
+    }
 }
-
-
 
 void UTurnContextWidget::ShowBlank()
 {
@@ -269,23 +317,51 @@ void UTurnContextWidget::ShowMovement(AUnitBase* Sel)
     ClearTargetFields();
     ClearEstimateFields();
 
-    // Movement HUD
     if (MoveBudgetText)
     {
         const int32 Budget = Sel ? FMath::Max(0, (int32)FMath::RoundToInt(Sel->MoveBudgetInches)) : 0;
         MoveBudgetText->SetText(FText::FromString(FString::Printf(TEXT("Move left: %d\""), Budget)));
     }
 
-    // Buttons: none for movement
+    // --- Advance button state ---
+    if (AdvanceBtn)
+    {
+        const bool bCanAdvance = bEnable && Sel && !Sel->bAdvancedThisTurn && (Sel->MoveMaxInches > 0.f);
+        AdvanceBtn->SetIsEnabled(bCanAdvance);
+    }
+    if (AdvanceLabel)
+    {
+        if (Sel && Sel->bAdvancedThisTurn)
+        {
+            // After server applies, we show the rolled bonus (set from client callback below too)
+            // If you want to show a cached last roll, store it on the Unit or Widget.
+            AdvanceLabel->SetText(FText::FromString(TEXT("Advanced")));
+        }
+        else
+        {
+            AdvanceLabel->SetText(FText::FromString(TEXT("Advance?")));
+        }
+    }
+
+    // Movement has no other buttons
     if (SelectTargetBtn)  SelectTargetBtn->SetIsEnabled(false);
     if (PrimaryActionBtn) PrimaryActionBtn->SetIsEnabled(false);
     if (CancelBtn)        CancelBtn->SetIsEnabled(false);
-
-    // Optional: grey panel in BP when !bEnable or no budget
-    (void)bEnable;
 }
 
+void UTurnContextWidget::OnAdvanceClicked()
+{
+    AMatchPlayerController* P = MPC();
+    if (!P) return;
 
+    if (AUnitBase* Sel = P->SelectedUnit)
+    {
+        P->Server_RequestAdvance(Sel);
+        // Optional: optimistic UI
+        if (AdvanceBtn)   AdvanceBtn->SetIsEnabled(false);
+        if (AdvanceLabel) AdvanceLabel->SetText(FText::FromString(TEXT("Rolling...")));
+    }
+}
 
 void UTurnContextWidget::FillAttacker(AUnitBase* U)
 {
