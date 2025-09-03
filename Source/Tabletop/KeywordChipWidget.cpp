@@ -1,26 +1,84 @@
 ﻿#include "KeywordChipWidget.h"
 #include "Components/Border.h"
+#include "Components/TextBlock.h"
+#include "Components/Image.h"
+
+void UKeywordChipWidget::NativeConstruct()
+{
+	Super::NativeConstruct();
+
+	if (!ensureMsgf(ChipBorder, TEXT("KeywordChipWidget: ChipBorder not bound. Name must match in the BP."))) {}
+	if (!ensureMsgf(LabelText,  TEXT("KeywordChipWidget: LabelText  not bound. Name must match in the BP."))) {}
+
+	
+	// In header defaults or in a C++ constructor of the widget
+	ActiveBg        = FLinearColor(0.12f,0.62f,0.30f,1.f);
+	ActiveText      = FLinearColor::White;
+	ActiveOpacity   = 1.0f;
+
+	ConditionalBg   = FLinearColor(0.18f,0.45f,0.72f,1.f);
+	ConditionalText = FLinearColor::White;
+	ConditionalOpacity = 0.85f;
+
+	InactiveBg      = FLinearColor(0.20f,0.20f,0.20f,1.f);
+	InactiveText    = FLinearColor(0.75f,0.75f,0.75f,1.f);
+	InactiveOpacity = 0.4f;
+	
+	ApplyVisuals();
+}
+
+void UKeywordChipWidget::InitFromInfo(const FKeywordUIInfo& Info)
+{
+	SetLabel(Info.Label);
+	SetTooltip(Info.Tooltip);
+	SetState(Info.State);
+}
 
 void UKeywordChipWidget::SetLabel(const FText& InText)
 {
-	if (Label) Label->SetText(InText);
+	if (LabelText)
+	{
+		LabelText->SetText(InText);
+		// Ensure it’s visible even if the BP style had a transparent color
+		LabelText->SetColorAndOpacity(FSlateColor(FLinearColor(1,1,1,1)));
+	}
+	else
+	{
+		SetToolTipText(InText); // fallback
+	}
 }
+
 void UKeywordChipWidget::SetTooltip(const FText& InText)
 {
-	// simplest: plain text tooltip
 	SetToolTipText(InText);
-	// (optional) SetToolTip() with a custom tooltip widget for richer layout
 }
-void UKeywordChipWidget::SetState(bool bActiveNow, bool bConditional)
+
+void UKeywordChipWidget::SetState(EKeywordUIState InState)
 {
-	if (!Pill) return;
-	// Example styling: green when active-now, amber when conditional
-	const FLinearColor C = bActiveNow ? FLinearColor(0.12f,0.55f,0.20f,1.f)
-									  : FLinearColor(0.80f,0.55f,0.00f,1.f);
-	Pill->SetBrushColor(C);
+	State = InState;
+	ApplyVisuals();
 }
-void UKeywordChipWidget::SetIconForKeyword(EWeaponKeyword Keyword)
+
+void UKeywordChipWidget::ApplyVisuals()
 {
-	if (!Icon) return;
-	// Map keywords → brush here if you have icons (optional).
+	FLinearColor Bg, Txt;
+	float Opacity = 1.0f;
+
+	switch (State)
+	{
+	case EKeywordUIState::ActiveNow:
+		Bg = ActiveBg;       Txt = ActiveText;       Opacity = ActiveOpacity;      break;
+	case EKeywordUIState::Conditional:
+		Bg = ConditionalBg;  Txt = ConditionalText;  Opacity = ConditionalOpacity; break;
+	case EKeywordUIState::Inactive:
+	default:
+		Bg = InactiveBg;     Txt = InactiveText;     Opacity = InactiveOpacity;    break;
+	}
+
+	if (ChipBorder)        ChipBorder->SetBrushColor(Bg);
+	if (LabelText)         LabelText->SetColorAndOpacity(Txt);
+	SetRenderOpacity(Opacity);
+
+	// Leave enabled so tooltips still show for inactive/conditional chips
+	SetIsEnabled(true);
 }

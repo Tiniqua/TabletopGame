@@ -168,10 +168,10 @@ int32 UWeaponKeywordHelpers::KeywordValue(const FWeaponProfile& W, EWeaponKeywor
     return Default;
 }
 
-void UWeaponKeywordHelpers::BuildKeywordUIInfos(const AUnitBase* Attacker,
-                                                const AUnitBase* Target,
-                                                int32 HitMod, int32 SaveMod,
-                                                TArray<FKeywordUIInfo>& Out)
+void UWeaponKeywordHelpers::BuildKeywordUIInfos(
+    const AUnitBase* Attacker, const AUnitBase* Target,
+    int32 HitMod, int32 SaveMod,
+    TArray<FKeywordUIInfo>& Out)
 {
     Out.Reset();
     if (!Attacker || !Target) return;
@@ -192,16 +192,25 @@ void UWeaponKeywordHelpers::BuildKeywordUIInfos(const AUnitBase* Attacker,
 
         switch (K)
         {
-        case EWeaponKeyword::Heavy:             bActive = !bMoved; break;
-        case EWeaponKeyword::Assault:           bActive = bAdvanced; break;
-        case EWeaponKeyword::RapidFire:         bActive = bAtHalf && KData.Value > 0; break;
-        case EWeaponKeyword::TwinLinked:        bActive = (KData.bRerollAllWounds || KData.bRerollOnesWounds); break;
-        case EWeaponKeyword::Shred:             bActive = true; break;
-        case EWeaponKeyword::Torrent:           bActive = true; break;
-        case EWeaponKeyword::IgnoresCover:      bActive = HasAnyCoverSaveBonus(HitMod, SaveMod); break;
-        case EWeaponKeyword::Piercing:          bActive = bAtHalf && KData.Value > 0; break;
+        // Situational: active if condition met; otherwise conditional (visible but grey)
+        case EWeaponKeyword::Heavy:       bActive = !bMoved;                          bCond = !bActive; break;
+        case EWeaponKeyword::Assault:     bActive = bAdvanced;                        bCond = !bActive; break;
+        case EWeaponKeyword::RapidFire:   bActive = bAtHalf && KData.Value > 0;       bCond = (KData.Value > 0) && !bActive; break;
+        case EWeaponKeyword::Piercing:    bActive = bAtHalf && KData.Value > 0;       bCond = (KData.Value > 0) && !bActive; break;
 
-        // Conditional (crit-driven or post-roll effects)
+        // Always-on
+        case EWeaponKeyword::Torrent:
+        case EWeaponKeyword::Shred:       bActive = true; break;
+
+        case EWeaponKeyword::TwinLinked:  bActive = (KData.bRerollAllWounds || KData.bRerollOnesWounds); break;
+
+        // Active only when cover actually improves the save in your rules
+        case EWeaponKeyword::IgnoresCover:
+            bActive = HasAnyCoverSaveBonus(HitMod, SaveMod);
+            // Optional: bCond = !bActive; // show as “would do something if target had cover”
+            break;
+
+        // Crit/on-resolution effects → conditional
         case EWeaponKeyword::SustainedHits:
         case EWeaponKeyword::LethalHits:
         case EWeaponKeyword::DevastatingWounds:
@@ -209,7 +218,7 @@ void UWeaponKeywordHelpers::BuildKeywordUIInfos(const AUnitBase* Attacker,
         case EWeaponKeyword::Rending:
             bCond = true; break;
 
-        // Informational (game-specific, not directly computed here)
+        // Informational (present on weapon, may trigger outside this calc)
         case EWeaponKeyword::Blast:
         case EWeaponKeyword::Hazardous:
         case EWeaponKeyword::Precision:
@@ -220,15 +229,19 @@ void UWeaponKeywordHelpers::BuildKeywordUIInfos(const AUnitBase* Attacker,
         default: break;
         }
 
-        if (!bActive && !bCond) continue;
-
         FKeywordUIInfo Info;
         Info.Keyword      = K;
         Info.bActiveNow   = bActive;
         Info.bConditional = bCond;
+        Info.State        = bActive ? EKeywordUIState::ActiveNow
+                                    : (bCond ? EKeywordUIState::Conditional : EKeywordUIState::Inactive);
         Info.Label        = GetKeywordLabel(K);
         Info.Tooltip      = GetKeywordTooltip(K, &KData, bActive, bCond, bAtHalf);
 
+        // ALWAYS add (no filter)
         Out.Add(Info);
     }
+
+    // Optional: include keywords the profile doesn't list (if you want fixed order)
+    // by iterating all enum values and adding missing ones with State=Inactive.
 }

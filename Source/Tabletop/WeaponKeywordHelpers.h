@@ -9,28 +9,28 @@
 struct FWeaponProfile;
 class AUnitBase;
 
-/** Data for a single keyword chip in the UI */
+UENUM(BlueprintType)
+enum class EKeywordUIState : uint8
+{
+	ActiveNow       UMETA(DisplayName="Active"),
+	Conditional     UMETA(DisplayName="Conditional"),
+	Inactive        UMETA(DisplayName="Inactive"),
+};
+
 USTRUCT(BlueprintType)
-struct TABLETOP_API FKeywordUIInfo
+struct FKeywordUIInfo
 {
 	GENERATED_BODY()
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	EWeaponKeyword Keyword = EWeaponKeyword::None;
+	UPROPERTY(BlueprintReadOnly) EWeaponKeyword Keyword = EWeaponKeyword::None;
+	UPROPERTY(BlueprintReadOnly) FText Label;
+	UPROPERTY(BlueprintReadOnly) FText Tooltip;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	FText Label;
+	UPROPERTY(BlueprintReadOnly) bool bActiveNow = false;
+	UPROPERTY(BlueprintReadOnly) bool bConditional = false;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	FText Tooltip;
-
-	/** True = actually affecting the current shot (e.g., Heavy while stationary, Rapid Fire at half range). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	bool bActiveNow = false;
-
-	/** True = conditional/on-crits/etc (e.g., Sustained Hits, Lethal Hits). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	bool bConditional = false;
+	// NEW: single state you can bind to for visuals
+	UPROPERTY(BlueprintReadOnly) EKeywordUIState State = EKeywordUIState::Inactive;
 };
 
 /**

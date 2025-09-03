@@ -87,35 +87,16 @@ void UTurnContextWidget::UpdateCombatEstimates(AUnitBase* Attacker, AUnitBase* T
 
 void UTurnContextWidget::RebuildKeywordChips(const TArray<FKeywordUIInfo>& Infos)
 {
-    if (!KeywordPanel) return;
+    if (!KeywordPanel || !KeywordChipClass) return;
 
     KeywordPanel->ClearChildren();
 
-    if (!KeywordChipClass) return;
-
-    for (const FKeywordUIInfo& Info : Infos)
+    for (const FKeywordUIInfo& I : Infos)
     {
-        UUserWidget* Chip = CreateWidget<UUserWidget>(this, KeywordChipClass);
-        if (!Chip) continue;
+        UKeywordChipWidget* Chip = CreateWidget<UKeywordChipWidget>(GetOwningPlayer(), KeywordChipClass);
+        if (!ensure(Chip)) continue;
 
-        // Expect the chip to expose setters via an interface or concrete class:
-        if (auto* Typed = Cast<UKeywordChipWidget>(Chip))
-        {
-            Typed->SetLabel(Info.Label);
-            Typed->SetTooltip(Info.Tooltip);
-            Typed->SetState(Info.bActiveNow, Info.bConditional);
-            Typed->SetIconForKeyword(Info.Keyword); // optional if you want icons
-        }
-        else
-        {
-            // Fallback: try to find a TextBlock named "Label" and set tooltip text on the root
-            if (UTextBlock* L = Cast<UTextBlock>(Chip->GetWidgetFromName(TEXT("Label"))))
-            {
-                L->SetText(Info.Label);
-            }
-            Chip->SetToolTipText(Info.Tooltip);
-        }
-
+        Chip->InitFromInfo(I);
         KeywordPanel->AddChild(Chip);
     }
 }
