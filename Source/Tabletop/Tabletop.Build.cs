@@ -18,7 +18,8 @@ public class Tabletop : ModuleRules
 				"Slate",
 				"SlateCore",
 				"Niagara",
-				"NetCore"
+				"NetCore",
+				"GameplayTags"
 			});
 		
 		PrivateDependencyModuleNames.AddRange(new string[] {

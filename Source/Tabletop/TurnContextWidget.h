@@ -4,6 +4,7 @@
 #include "Blueprint/UserWidget.h"
 #include "TurnContextWidget.generated.h"
 
+struct FKeywordUIInfo;
 enum class ECoverType : uint8;
 class UWidgetSwitcher;
 class UPanelWidget;
@@ -90,6 +91,11 @@ protected:
 
     void UpdateCombatEstimates(class AUnitBase* Attacker, class AUnitBase* Target,
                            int32 HitMod, int32 SaveMod, ECoverType CoverType);
+
+    UPROPERTY(meta=(BindWidget)) class UPanelWidget* KeywordPanel = nullptr;
+    UPROPERTY(EditDefaultsOnly)  TSubclassOf<class UKeywordChipWidget> KeywordChipClass;
+
+    void RebuildKeywordChips(const TArray<FKeywordUIInfo>& Infos);
 
     // Clear those fields (when no target / wrong phase)
     void ClearEstimateFields();

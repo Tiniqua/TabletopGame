@@ -1,6 +1,8 @@
 #include "TurnContextWidget.h"
 
+#include "KeywordChipWidget.h"
 #include "LibraryHelpers.h"
+#include "WeaponKeywordHelpers.h"
 #include "Components/WidgetSwitcher.h"
 #include "Components/PanelWidget.h"
 #include "Components/Button.h"
@@ -81,6 +83,41 @@ void UTurnContextWidget::UpdateCombatEstimates(AUnitBase* Attacker, AUnitBase* T
 
     if (CoverStatusText)
         CoverStatusText->SetText(FText::FromString(CombatMath::CoverTypeToText(CoverType)));
+}
+
+void UTurnContextWidget::RebuildKeywordChips(const TArray<FKeywordUIInfo>& Infos)
+{
+    if (!KeywordPanel) return;
+
+    KeywordPanel->ClearChildren();
+
+    if (!KeywordChipClass) return;
+
+    for (const FKeywordUIInfo& Info : Infos)
+    {
+        UUserWidget* Chip = CreateWidget<UUserWidget>(this, KeywordChipClass);
+        if (!Chip) continue;
+
+        // Expect the chip to expose setters via an interface or concrete class:
+        if (auto* Typed = Cast<UKeywordChipWidget>(Chip))
+        {
+            Typed->SetLabel(Info.Label);
+            Typed->SetTooltip(Info.Tooltip);
+            Typed->SetState(Info.bActiveNow, Info.bConditional);
+            Typed->SetIconForKeyword(Info.Keyword); // optional if you want icons
+        }
+        else
+        {
+            // Fallback: try to find a TextBlock named "Label" and set tooltip text on the root
+            if (UTextBlock* L = Cast<UTextBlock>(Chip->GetWidgetFromName(TEXT("Label"))))
+            {
+                L->SetText(Info.Label);
+            }
+            Chip->SetToolTipText(Info.Tooltip);
+        }
+
+        KeywordPanel->AddChild(Chip);
+    }
 }
 
 void UTurnContextWidget::NativeConstruct()
@@ -193,15 +230,20 @@ void UTurnContextWidget::ShowShootPhase(AUnitBase* Sel)
     {
         FillTarget(S->Preview.Target);
 
-        const int32    HitMod = S->ActionPreview.HitMod;
-        const int32    SaveMod = S->ActionPreview.SaveMod;
+        const int32 HitMod = S->ActionPreview.HitMod;
+        const int32 SaveMod = S->ActionPreview.SaveMod;
         const ECoverType Cover = S->ActionPreview.Cover;
 
         UpdateCombatEstimates(Sel, S->Preview.Target, HitMod, SaveMod, Cover);
+
+        TArray<FKeywordUIInfo> Infos;
+        UWeaponKeywordHelpers::BuildKeywordUIInfos(Sel, S->Preview.Target, HitMod, SaveMod, Infos);
+        RebuildKeywordChips(Infos);
     }
     else
     {
         ClearEstimateFields();
+        if (KeywordPanel) KeywordPanel->ClearChildren();
     }
 
     const bool bCanShoot = bMine && Sel && !Sel->bHasShot;

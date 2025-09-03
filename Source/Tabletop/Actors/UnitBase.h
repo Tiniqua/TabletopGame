@@ -3,8 +3,10 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "Tabletop/ArmyData.h"
+#include "Tabletop/CombatEffects.h"   // FRollModifiers / ECombatEvent
 #include "UnitBase.generated.h"
 
+struct FUnitModifier;                 // from UnitModifiers.h
 class USphereComponent;
 class UStaticMeshComponent;
 class UStaticMesh;
@@ -20,7 +22,7 @@ public:
     
     UFUNCTION(BlueprintCallable, BlueprintPure)
     void GetModelWorldLocations(TArray<FVector>& Out) const;
-    
+
     // ---------- Identity / ownership (replicated) ----------
     UPROPERTY(Replicated) FName UnitId = NAME_None;
     UPROPERTY(Replicated) EFaction Faction = EFaction::None;
@@ -28,6 +30,14 @@ public:
 
     // Chosen weapon index within the row (server sets, clients read)
     UPROPERTY(Replicated) int32 WeaponIndex = 0;
+
+    // Active combat mods (REPLICATED so clients can preview/visualize)
+    UPROPERTY(Replicated, BlueprintReadOnly)
+    TArray<FUnitModifier> ActiveCombatMods;
+
+    // Track move/advance this turn (REPLICATED for preview & keyword logic)
+    UPROPERTY(Replicated, BlueprintReadOnly) bool bMovedThisTurn = false;
+    UPROPERTY(Replicated, BlueprintReadOnly) bool bAdvancedThisTurn = false;
 
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Replicated, Category="Stats|Objective")
     int32 ObjectiveControlPerModel = 1;
@@ -39,13 +49,20 @@ public:
     UPROPERTY(ReplicatedUsing=OnRep_Models) int32 ModelsCurrent = 0;
     UPROPERTY(Replicated)                 int32 ModelsMax     = 0;
     UPROPERTY(Replicated)                 FText UnitName;
+    
+    UPROPERTY(ReplicatedUsing=OnRep_CurrentWeapon)
+    FWeaponProfile CurrentWeapon;
 
+    // Accessor used by gameplay (server authoritative)
+    FORCEINLINE const FWeaponProfile& GetActiveWeaponProfile() const { return CurrentWeapon; }
+
+    
     UPROPERTY(ReplicatedUsing=OnRep_Move) float MoveBudgetInches = 0.f;
     UPROPERTY(Replicated)                 float MoveMaxInches    = 0.f;
 
     UPROPERTY(Replicated) bool bHasShot         = false;
 
-    // ---------- Replicated stat snapshot (so clients don’t need to DT lookup) ----------
+    // ---------- Replicated stat snapshot ----------
     UPROPERTY(Replicated) int32 ToughnessRep = 0;
     UPROPERTY(Replicated) int32 WoundsRep    = 0;
     UPROPERTY(Replicated) int32 SaveRep      = 5;
@@ -62,6 +79,20 @@ public:
     int32 GetSave() const { return SaveRep; }
 
     void ApplyDamage_Server(int32 Damage);
+    void ApplyMortalDamage_Server(int32 Damage);
+
+    UFUNCTION()
+    void OnRep_CurrentWeapon();
+
+    // Small helper so both Server_InitFromRow and OnRep_CurrentWeapon can call it
+    void SyncWeaponSnapshotsFromCurrent();
+
+    // Mods API (no bespoke debuff funcs)
+    void AddUnitModifier(const FUnitModifier& Mod);
+    FRollModifiers CollectStageMods(ECombatEvent Stage, bool bAsAttacker, const class AUnitBase* Opponent) const;
+    void ConsumeForStage(ECombatEvent Stage, bool bAsAttacker);
+    void OnTurnAdvanced();
+    void OnRoundAdvanced();
 
     UFUNCTION() void OnRep_Health();
     
@@ -97,9 +128,8 @@ public:
     int32 GetWoundsPerModel() const { return FMath::Max(1, WoundsRep); }
     
     UPROPERTY(EditAnywhere, Category="Formation", meta=(ClampMin="0.0"))
-    float ModelPaddingCm = 2.0f;   // extra gap between model silhouettes
+    float ModelPaddingCm = 2.0f;
 
-    // Visual offset if the mesh's "forward" isn't +X
     UPROPERTY(EditAnywhere, Category="Formation", meta=(ClampMin="-180.0", ClampMax="180.0"))
     float ModelYawVisualOffsetDeg = 0.0f;
 
@@ -122,18 +152,15 @@ public:
     UPROPERTY(EditDefaultsOnly, Category="VFX|Audio")
     class USoundBase* Snd_Impact = nullptr;
 
-    // optional attenuation/concurrency (leave null to use defaults)
     UPROPERTY(EditDefaultsOnly, Category="VFX|Audio")
     class USoundAttenuation* SndAttenuation = nullptr;
 
     UPROPERTY(EditDefaultsOnly, Category="VFX|Audio")
     class USoundConcurrency* SndConcurrency = nullptr;
 
-    // delay between muzzle and impact (seconds)
     UPROPERTY(EditAnywhere, Category="VFX|Audio", meta=(ClampMin="0.0"))
     float ImpactDelaySeconds = 1.0f;
 
-    // sockets/offsets you already use
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="VFX")
     FName MuzzleSocketName = "Muzzle";
 
@@ -148,26 +175,21 @@ public:
 
     FTimerHandle ImpactFXTimerHandle;
 
-    // multicast (already present)
     UFUNCTION(NetMulticast, Unreliable)
     void Multicast_PlayMuzzleAndImpactFX_AllModels(class AUnitBase* TargetUnit, float DelaySeconds);
     
-    // helper the timer will call
     UFUNCTION()
     void PlayImpactFXAndSounds_Delayed(AUnitBase* TargetUnit);
 
-    // (helpers)
     UFUNCTION(BlueprintPure, Category="VFX")
     FTransform GetMuzzleTransform(int32 ModelIndex) const;
 
     UPROPERTY(EditDefaultsOnly, Category="Selection")
     TEnumAsByte<ECollisionChannel> SelectionTraceECC = ECC_GameTraceChannel2;
 
-    // If your mesh assets often lack simple collision, this helps selection “just work”
     UPROPERTY(EditDefaultsOnly, Category="Selection")
     bool bUseComplexForSelection = true;
 
-    // Simple list of per-model components (client & server)
     UPROPERTY() TArray<UStaticMeshComponent*> ModelMeshes;
 
     UFUNCTION(BlueprintPure, Category="VFX")
@@ -179,21 +201,15 @@ protected:
     UFUNCTION() void OnRep_Models();
     UFUNCTION() void OnRep_Move();
 
-    // Build N child meshes in a grid from ModelsCurrent
     void RebuildFormation();
 
     virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Out) const override;
 
-    // ---------- Components / visuals ----------
     UPROPERTY(VisibleAnywhere) USphereComponent* SelectCollision = nullptr;
 
-    
-
-    // Mesh to use per model (assign in BP or defaults)
     UPROPERTY(EditDefaultsOnly, Category="Unit|Visual")
     UStaticMesh* ModelMesh = nullptr;
 
-    // Grid settings
     UPROPERTY(EditDefaultsOnly, Category="Unit|Visual")
     int32 GridColumns = 3;
 
@@ -203,7 +219,6 @@ protected:
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Formation", meta=(ClampMin="0.0"))
     float ExtraSpacingCmY = 10.f;
 
-    // Per-unit BP override
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Formation", meta=(ClampMin="0.05", ClampMax="10.0"))
     float ModelScale = 1.0f;
 

@@ -10,6 +10,7 @@
 #include "Kismet/GameplayStatics.h"
 #include "Tabletop/PlayerStates/TabletopPlayerState.h"
 
+
 AUnitBase::AUnitBase()
 {
     bReplicates = true;
@@ -23,20 +24,15 @@ AUnitBase::AUnitBase()
     SelectCollision->InitSphereRadius(60.f);
     SelectCollision->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
     SelectCollision->SetCollisionResponseToAllChannels(ECR_Ignore);
-    // Match your PC trace channel choice (see controller code)
     SelectCollision->SetCollisionResponseToChannel(ECC_GameTraceChannel2, ECR_Block);
-    // Optional: also block visibility if you select on visibility
-    // SelectCollision->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
 }
 
 void AUnitBase::BeginPlay()
 {
     Super::BeginPlay();
 
-    // On clients, replicated ModelsCurrent may arrive later; OnRep_Models will build the formation.
     if (HasAuthority())
     {
-        // Ensure a valid formation on server from the start (useful on listen host)
         RebuildFormation();
     }
 }
@@ -50,7 +46,6 @@ void AUnitBase::Server_InitFromRow(APlayerState* OwnerPS, const FUnitRow& Row, i
     UnitId   = Row.UnitId;
     ObjectiveControlPerModel = Row.ObjectiveControlPerModel;
 
-
     if (const ATabletopPlayerState* TPS = Cast<ATabletopPlayerState>(OwnerPS))
     {
         Faction = TPS->SelectedFaction;
@@ -60,46 +55,51 @@ void AUnitBase::Server_InitFromRow(APlayerState* OwnerPS, const FUnitRow& Row, i
     ModelsMax     = Row.Models;
     ModelsCurrent = ModelsMax;
 
-    // Core stats snapshot
     ToughnessRep = Row.Toughness;
     WoundsRep    = Row.Wounds;
-    SaveRep      = Row.Save;        // NEW
+    SaveRep      = Row.Save;
 
-    // Wounds pool (models * wounds each)
-    WoundsPool = ModelsMax * FMath::Max(1, WoundsRep); // NEW
+    WoundsPool = ModelsMax * FMath::Max(1, WoundsRep);
 
-    // Movement
-    MoveMaxInches    = (float)Row.MoveInches;
+    MoveMaxInches    = static_cast<float>(Row.MoveInches);
     MoveBudgetInches = 0.f;
 
-    // Weapon snapshot
     if (Row.Weapons.Num() > 0)
     {
-        WeaponIndex = FMath::Clamp(InWeaponIndex, 0, Row.Weapons.Num() - 1);
-        const FWeaponProfile& W = Row.Weapons[WeaponIndex];
-
-        WeaponRangeInchesRep = W.RangeInches;
-        WeaponAttacksRep     = W.Attacks;
-        WeaponDamageRep      = W.Damage;
-
-        WeaponSkillToHitRep  = W.SkillToHit;   // NEW
-        WeaponStrengthRep    = W.Strength;     // NEW
-        WeaponAPRep          = W.AP;           // NEW
+        WeaponIndex   = FMath::Clamp(InWeaponIndex, 0, Row.Weapons.Num() - 1);
+        CurrentWeapon = Row.Weapons[WeaponIndex];        // 🔹 single source of truth
     }
     else
     {
-        WeaponIndex = 0;
-        WeaponRangeInchesRep = 0;
-        WeaponAttacksRep     = 0;
-        WeaponDamageRep      = 0;
-
-        WeaponSkillToHitRep  = 6;
-        WeaponStrengthRep    = 3;
-        WeaponAPRep          = 0;
+        WeaponIndex   = 0;
+        CurrentWeapon = FWeaponProfile{};                // defaults (Range=24 etc. if you set)
     }
+
+    // Snapshots for UI/fast access stay in sync with CurrentWeapon
+    SyncWeaponSnapshotsFromCurrent();
+
+    bMovedThisTurn    = false;
+    bAdvancedThisTurn = false;
 
     RebuildFormation();
     ForceNetUpdate();
+}
+
+void AUnitBase::SyncWeaponSnapshotsFromCurrent()
+{
+    // Mirror a few frequently-read ints (optional, but you already have UIs reading these)
+    WeaponRangeInchesRep = CurrentWeapon.RangeInches;
+    WeaponAttacksRep     = CurrentWeapon.Attacks;
+    WeaponDamageRep      = CurrentWeapon.Damage;
+    WeaponSkillToHitRep  = CurrentWeapon.SkillToHit;
+    WeaponStrengthRep    = CurrentWeapon.Strength;
+    WeaponAPRep          = CurrentWeapon.AP;
+}
+
+void AUnitBase::OnRep_CurrentWeapon()
+{
+    // Keep cached ints consistent on clients
+    SyncWeaponSnapshotsFromCurrent();
 }
 
 FTransform AUnitBase::GetMuzzleTransform(int32 ModelIndex) const
@@ -109,18 +109,16 @@ FTransform AUnitBase::GetMuzzleTransform(int32 ModelIndex) const
 
     UStaticMeshComponent* C = ModelMeshes[ModelIndex];
 
-    // If we have a socket, assume the socket is authored to face the weapon's forward.
     if (C->DoesSocketExist(MuzzleSocketName))
     {
         return C->GetSocketTransform(MuzzleSocketName, ERelativeTransformSpace::RTS_World);
     }
 
-    // Fallback: place at local offset, and add the same yaw offset you use for the model.
     const FTransform WT = C->GetComponentTransform();
     const FVector   WLoc = WT.TransformPosition(MuzzleOffsetLocal);
 
-    FRotator OutRot = WT.Rotator();             // current model component world rot
-    OutRot.Yaw += FacingYawOffsetDeg;           // apply your visual yaw offset
+    FRotator OutRot = WT.Rotator();
+    OutRot.Yaw += FacingYawOffsetDeg;
 
     return FTransform(OutRot, WLoc, WT.GetScale3D());
 }
@@ -129,7 +127,6 @@ void AUnitBase::Multicast_PlayMuzzleAndImpactFX_AllModels_Implementation(AUnitBa
 {
     if (!IsValid(TargetUnit)) return;
 
-    // --- MUZZLES (instant) ---
     const FVector TargetCenter = TargetUnit->GetActorLocation();
     for (int32 i = 0; i < ModelMeshes.Num(); ++i)
     {
@@ -144,7 +141,6 @@ void AUnitBase::Multicast_PlayMuzzleAndImpactFX_AllModels_Implementation(AUnitBa
         if (Snd_Muzzle) UGameplayStatics::PlaySoundAtLocation(this, Snd_Muzzle, MuzzLoc, 1.f, 1.f, 0.f, SndAttenuation, SndConcurrency);
     }
 
-    // --- schedule IMPACTS after the provided delay ---
     FTimerDelegate Del;
     Del.BindUFunction(this, FName("PlayImpactFXAndSounds_Delayed"), TargetUnit);
 
@@ -163,8 +159,6 @@ int32 AUnitBase::FindBestShooterModelIndex(const FVector& TargetWorld) const
         if (!IsValid(C)) continue;
 
         const FVector MuzzleLoc = GetMuzzleTransform(i).GetLocation();
-
-        // Prefer horizontal closeness (ignore Z for tabletop feel)
         const float D2 = FVector::DistSquaredXY(MuzzleLoc, TargetWorld);
         if (D2 < BestD2)
         {
@@ -172,8 +166,6 @@ int32 AUnitBase::FindBestShooterModelIndex(const FVector& TargetWorld) const
             BestIdx = i;
         }
     }
-
-    // Fallback if nothing valid (e.g., zero models)
     return (BestIdx == INDEX_NONE) ? 0 : BestIdx;
 }
 
@@ -200,7 +192,6 @@ void AUnitBase::PlayImpactFXAndSounds_Delayed(AUnitBase* TargetUnit)
 
         const FVector InDir = (ImpactLoc - AttackerCenter).GetSafeNormal();
         FRotator ImpactRot = InDir.Rotation();
-
         ImpactRot.Yaw -= FacingYawOffsetDeg; 
 
         if (FX_Impact)
@@ -227,9 +218,8 @@ int32 AUnitBase::GetObjectiveControlAt(const AObjectiveMarker* Marker) const
 {
     if (!Marker || ObjectiveControlPerModel <= 0) return 0;
 
-    // You already have something like this; use your version.
     TArray<FVector> ModelLocs;
-    GetModelWorldLocations(ModelLocs);              // <- your existing helper
+    GetModelWorldLocations(ModelLocs);
     if (ModelLocs.Num() == 0) return 0;
 
     int32 ModelsIn = 0;
@@ -240,14 +230,12 @@ int32 AUnitBase::GetObjectiveControlAt(const AObjectiveMarker* Marker) const
     return ModelsIn * ObjectiveControlPerModel;
 }
 
-
 void AUnitBase::ApplyDamage_Server(int32 Damage)
 {
     if (!HasAuthority() || Damage <= 0) return;
 
     WoundsPool = FMath::Max(0, WoundsPool - Damage);
 
-    // Ceil division to compute how many models still stand
     const int32 PerModel = FMath::Max(1, WoundsRep);
     int32 NewModels = (WoundsPool + PerModel - 1) / PerModel;
     NewModels = FMath::Clamp(NewModels, 0, ModelsMax);
@@ -260,11 +248,17 @@ void AUnitBase::ApplyDamage_Server(int32 Damage)
 
     if (WoundsPool <= 0)
     {
-        Destroy(); // replicated destroy
+        Destroy();
         return;
     }
 
     ForceNetUpdate();
+}
+
+void AUnitBase::ApplyMortalDamage_Server(int32 Damage)
+{
+    // For now treat as normal unsavable damage; can extend if you track separate pools.
+    ApplyDamage_Server(Damage);
 }
 
 void AUnitBase::OnDamaged(int32 ModelsLost, int32 /*WoundsOverflow*/)
@@ -272,14 +266,12 @@ void AUnitBase::OnDamaged(int32 ModelsLost, int32 /*WoundsOverflow*/)
     if (!HasAuthority()) return;
 
     ModelsCurrent = FMath::Clamp(ModelsCurrent - FMath::Max(0, ModelsLost), 0, ModelsMax);
-    
     RebuildFormation();
     ForceNetUpdate();
 }
 
 void AUnitBase::OnRep_Health()
 {
-    // Recompute ModelsCurrent from WoundsPool on clients and rebuild
     const int32 PerModel = FMath::Max(1, WoundsRep);
     int32 NewModels = (WoundsPool + PerModel - 1) / PerModel;
     NewModels = FMath::Clamp(NewModels, 0, ModelsMax);
@@ -291,7 +283,73 @@ void AUnitBase::OnRep_Health()
     RebuildFormation();
 }
 
-/** Simple highlight toggle (uses CustomDepth on all model meshes) */
+void AUnitBase::AddUnitModifier(const FUnitModifier& Mod)
+{
+    ActiveCombatMods.Add(Mod);
+}
+
+static bool MatchesRole(const FUnitModifier& M, bool bAsAttacker)
+{
+    if (M.Targeting == EModifierTarget::OwnerAlways)        return true;
+    if (M.Targeting == EModifierTarget::OwnerWhenAttacking) return bAsAttacker;
+    if (M.Targeting == EModifierTarget::OwnerWhenDefending) return !bAsAttacker;
+    return false;
+}
+
+FRollModifiers AUnitBase::CollectStageMods(ECombatEvent Stage, bool bAsAttacker, const AUnitBase* /*Opp*/) const
+{
+    FRollModifiers Out;
+    for (const FUnitModifier& M : ActiveCombatMods)
+    {
+        if (M.AppliesAt != Stage) continue;
+        if (!MatchesRole(M, bAsAttacker)) continue;
+
+        Out.Accumulate(M.Mods);
+    }
+    return Out;
+}
+
+void AUnitBase::ConsumeForStage(ECombatEvent Stage, bool bAsAttacker)
+{
+    for (int32 i = ActiveCombatMods.Num()-1; i >= 0; --i)
+    {
+        FUnitModifier& M = ActiveCombatMods[i];
+        if (M.AppliesAt != Stage || !MatchesRole(M, bAsAttacker)) continue;
+
+        if (M.Expiry == EModifierExpiry::NextNOwnerShots && bAsAttacker)
+        {
+            if (M.UsesRemaining > 0 && --M.UsesRemaining == 0)
+                ActiveCombatMods.RemoveAtSwap(i);
+        }
+        else if (M.Expiry == EModifierExpiry::Uses)
+        {
+            if (M.UsesRemaining > 0 && --M.UsesRemaining == 0)
+                ActiveCombatMods.RemoveAtSwap(i);
+        }
+    }
+}
+
+void AUnitBase::OnTurnAdvanced()
+{
+    for (int32 i = ActiveCombatMods.Num()-1; i >= 0; --i)
+    {
+        FUnitModifier& M = ActiveCombatMods[i];
+        if (M.Expiry == EModifierExpiry::UntilEndOfTurn && --M.TurnsRemaining <= 0)
+            ActiveCombatMods.RemoveAtSwap(i);
+    }
+}
+
+void AUnitBase::OnRoundAdvanced()
+{
+    for (int32 i = ActiveCombatMods.Num()-1; i >= 0; --i)
+    {
+        FUnitModifier& M = ActiveCombatMods[i];
+        if (M.Expiry == EModifierExpiry::UntilEndOfRound && --M.TurnsRemaining <= 0)
+            ActiveCombatMods.RemoveAtSwap(i);
+    }
+}
+
+/** Simple highlight toggle */
 void AUnitBase::SetHighlighted(bool bOn)
 {
     for (UStaticMeshComponent* C : ModelMeshes)
@@ -317,21 +375,16 @@ void AUnitBase::OnDeselected()
     SetHighlighted(false);
 }
 
-
-
-/** RepNotify: models changed → rebuild local formation */
 void AUnitBase::OnRep_Models()
 {
     RebuildFormation();
 }
 
-/** RepNotify: movement budget changed → (hook for VFX/UI if desired) */
 void AUnitBase::OnRep_Move()
 {
-    // Intentionally empty for now; your UI can listen via controller/GS and read MoveBudgetInches.
+    // Hook for UI if needed
 }
 
-/** Ensure there are exactly ModelsCurrent mesh components in a grid. */
 void AUnitBase::RebuildFormation()
 {
     const int32 Needed = FMath::Max(0, ModelsCurrent);
@@ -356,7 +409,6 @@ void AUnitBase::RebuildFormation()
         C->SetRenderCustomDepth(false);
         C->SetRelativeScale3D(FVector(ModelScale));
 
-        // selection trace response (keep what you already set)
         C->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
         C->SetGenerateOverlapEvents(false);
         C->SetCollisionResponseToAllChannels(ECR_Ignore);
@@ -368,16 +420,13 @@ void AUnitBase::RebuildFormation()
 
     if (ModelMeshes.Num() == 0) return;
 
-    // --- derive a "disc radius" from the mesh's XY bounds ---
     FVector Ext(50, 50, 50);
     if (UStaticMesh* SM = ModelMeshes[0]->GetStaticMesh())
         Ext = SM->GetBounds().BoxExtent;
 
-    const float radius = FMath::Max(Ext.X, Ext.Y) * ModelScale; // cm
-    const float d      = (radius * 2.0f) + ModelPaddingCm;      // center-to-center spacing (no overlap)
+    const float radius = FMath::Max(Ext.X, Ext.Y) * ModelScale;
+    const float d      = (radius * 2.0f) + ModelPaddingCm;
 
-    // --- generate hex spiral centers (most compact even spacing) ---
-    // axial -> 2D mapping (triangular lattice with nearest-neighbour spacing d)
     auto AxialToXY = [d](int q, int r) -> FVector2D
     {
         const float x = d * (q + r * 0.5f);
@@ -396,38 +445,32 @@ void AUnitBase::RebuildFormation()
     auto Add = [](FCube a, FCube b){ return FCube{a.x+b.x, a.y+b.y, a.z+b.z}; };
 
     TArray<FVector2D> points; points.Reserve(Needed);
-    points.Add(FVector2D::ZeroVector); // center for model 0
+    points.Add(FVector2D::ZeroVector);
 
     for (int ring = 1; points.Num() < Needed; ++ring)
     {
-        // start at (ring, -ring, 0)
         FCube cur{ring, -ring, 0};
         for (int side = 0; side < 6 && points.Num() < Needed; ++side)
         {
             const FCube step = Dir(side);
             for (int stepIdx = 0; stepIdx < ring && points.Num() < Needed; ++stepIdx)
             {
-                // axial (q,r) = (x,z)
                 points.Add(AxialToXY(cur.x, cur.z));
                 cur = Add(cur, step);
             }
         }
     }
 
-    // center the whole blob around actor origin (subtract centroid)
     FVector2D centroid(0,0);
     for (const auto& p : points) centroid += p;
     centroid /= float(points.Num());
 
-    // apply to components (keep existing relative rotation & scale, only relocate)
     for (int32 i = 0; i < ModelMeshes.Num(); ++i)
     {
         if (UStaticMeshComponent* C = ModelMeshes[i])
         {
             const FVector2D p = points[i] - centroid;
             C->SetRelativeLocation(FVector(p.X, p.Y, 0.f));
-
-            // keep whatever visual yaw offset you want
             C->SetRelativeRotation(FRotator(0.f, ModelYawVisualOffsetDeg, 0.f));
             C->SetRelativeScale3D(FVector(ModelScale));
         }
@@ -436,7 +479,6 @@ void AUnitBase::RebuildFormation()
 
 void AUnitBase::VisualFaceYaw(float WorldYaw)
 {
-    // convert to the unit's local frame
     const float LocalYaw = WorldYaw - GetActorRotation().Yaw;
 
     for (UStaticMeshComponent* C : ModelMeshes)
@@ -505,7 +547,6 @@ bool AUnitBase::IsEnemy(const AUnitBase* Other) const
     APlayerState* MyPS    = OwningPS;
     APlayerState* TheirPS = Other->OwningPS;
 
-    // If both PS valid, prefer team check when available
     if (MyPS && TheirPS)
     {
         const ATabletopPlayerState* M = Cast<ATabletopPlayerState>(MyPS);
@@ -514,15 +555,11 @@ bool AUnitBase::IsEnemy(const AUnitBase* Other) const
         {
             return M->TeamNum != T->TeamNum;
         }
-        // Fall back to pointer inequality
         return MyPS != TheirPS;
     }
-
-    // If either side has no PS yet, be conservative: NOT enemies.
     return false;
 }
 
-/** Replication setup */
 void AUnitBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
     Super::GetLifetimeReplicatedProps(OutLifetimeProps);
@@ -544,7 +581,6 @@ void AUnitBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetim
     DOREPLIFETIME(AUnitBase, WoundsRep);
     DOREPLIFETIME(AUnitBase, ObjectiveControlPerModel);
 
-
     DOREPLIFETIME(AUnitBase, WeaponRangeInchesRep);
     DOREPLIFETIME(AUnitBase, WeaponAttacksRep);
     DOREPLIFETIME(AUnitBase, WeaponDamageRep);
@@ -554,4 +590,11 @@ void AUnitBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetim
     DOREPLIFETIME(AUnitBase, WeaponStrengthRep);
     DOREPLIFETIME(AUnitBase, WeaponAPRep);
     DOREPLIFETIME(AUnitBase, WoundsPool);
+
+    DOREPLIFETIME(AUnitBase, ActiveCombatMods);
+    DOREPLIFETIME(AUnitBase, bMovedThisTurn);
+    DOREPLIFETIME(AUnitBase, bAdvancedThisTurn);
+
+    DOREPLIFETIME(AUnitBase, CurrentWeapon);
+
 }

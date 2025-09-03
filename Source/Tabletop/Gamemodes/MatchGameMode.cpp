@@ -1,4 +1,4 @@
-
+// MatchGameMode.cpp
 #include "MatchGameMode.h"
 
 #include "EngineUtils.h"
@@ -6,6 +6,8 @@
 #include "Components/LineBatchComponent.h"
 #include "Kismet/GameplayStatics.h"
 #include "Net/UnrealNetwork.h"
+
+// Your existing includes
 #include "Tabletop/Actors/CoverVolume.h"
 #include "Tabletop/Actors/DeploymentZone.h"
 #include "Tabletop/Actors/NetDebugTextActor.h"
@@ -14,6 +16,13 @@
 #include "Tabletop/Characters/TabletopCharacter.h"
 #include "Tabletop/Controllers/MatchPlayerController.h"
 #include "Tabletop/PlayerStates/TabletopPlayerState.h"
+
+// Data-driven combat system additions
+#include "Tabletop/ArmyData.h"                  // Faction -> Units DT lookup
+#include "Tabletop/WeaponKeywords.h"
+#include "Tabletop/CombatEffects.h"
+#include "Tabletop/KeywordProcessor.h"
+#include "Tabletop/WeaponKeywordHelpers.h"
 
 namespace
 {
@@ -67,7 +76,7 @@ static APlayerState* ResolveControllerPS(const AMatchGameState* S, const APlayer
     if (TPS && TP1 && TPS->TeamNum > 0 && TPS->TeamNum == TP1->TeamNum) return S->P1;
     if (TPS && TP2 && TPS->TeamNum > 0 && TPS->TeamNum == TP2->TeamNum) return S->P2;
 
-    // 3) Couldn’t resolve — returns nullptr so callers can early‑out safely.
+    // 3) Couldn’t resolve — returns nullptr so callers can early-out safely.
     return nullptr;
 }
 
@@ -104,7 +113,6 @@ void AMatchGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutL
     DOREPLIFETIME(AMatchGameState, ScoreP2);
     DOREPLIFETIME(AMatchGameState, Preview);
     DOREPLIFETIME(AMatchGameState, ActionPreview);
-    
 }
 
 void AMatchGameState::Multicast_ScreenMsg_Implementation(const FString& Text, FColor Color, float Time, int32 Key)
@@ -118,7 +126,6 @@ void AMatchGameState::Multicast_DrawWorldText_Implementation(const FVector& Worl
     if (!bEnableNetDebugDraw) return;
     UWorld* W = GetWorld(); if (!W) return;
 
-    //const TSubclassOf<ANetDebugTextActor> Cls = DebugTextActorClass ? DebugTextActorClass : ANetDebugTextActor::StaticClass();
     FTransform T(FRotator::ZeroRotator, WorldLoc);
     TSubclassOf<ANetDebugTextActor> Cls = DebugTextActorClass;
     if (!Cls)
@@ -126,7 +133,6 @@ void AMatchGameState::Multicast_DrawWorldText_Implementation(const FVector& Worl
         Cls = TSubclassOf<ANetDebugTextActor>(ANetDebugTextActor::StaticClass());
     }
 
-    // usage:
     if (ANetDebugTextActor* A = W->SpawnActorDeferred<ANetDebugTextActor>(Cls, T))
     {
         A->Init(Text, Color, DebugTextWorldSize, Time);
@@ -159,7 +165,6 @@ void AMatchGameState::Multicast_DrawSphere_Implementation(const FVector& Center,
     UWorld* World = GetWorld();
     if (!World) return;
 
-    // Use 3 great-circle rings via the batcher (Shipping-safe), or fallback to DrawDebugSphere.
     const int32 N = FMath::Max(8, Segments);
     auto Ring = [&](const FVector& X, const FVector& Y)
     {
@@ -187,7 +192,6 @@ void AMatchGameState::BeginPlay()
         if (auto* M = Cast<AObjectiveMarker>(A)) Objectives.Add(M);
 }
 
-
 void AMatchGameState::Multicast_DrawShotDebug_Implementation(const FVector& WorldLoc, const FString& Msg, FColor Color, float Duration)
 {
     if (!bEnableNetDebugDraw) return;
@@ -200,7 +204,6 @@ void AMatchGameState::Multicast_DrawShotDebug_Implementation(const FVector& Worl
         Cls = TSubclassOf<ANetDebugTextActor>(ANetDebugTextActor::StaticClass());
     }
 
-    // usage:
     if (ANetDebugTextActor* A = W->SpawnActorDeferred<ANetDebugTextActor>(Cls, T))
     {
         A->Init(Msg, Color, DebugTextWorldSize * 1.1f, Duration);
@@ -232,6 +235,9 @@ void AMatchGameMode::ResetTurnFor(APlayerState* PS)
         {
             It->MoveBudgetInches = It->MoveMaxInches;
             It->bHasShot = false;
+            It->bMovedThisTurn = false;
+            It->bAdvancedThisTurn = false;
+            It->OnTurnAdvanced(); // decay per-turn unit modifiers
             It->ForceNetUpdate();
         }
     }
@@ -267,7 +273,6 @@ void AMatchGameMode::ResolveMoveToBudget(
 
     OutSpentTTIn = SpendTTIn;
 
-    // Scale along the direction to fit inside budget
     const float AllowedCm = SpendTTIn * CmPerTTI;
     if (AllowedCm + KINDA_SMALL_NUMBER < DistCm)
     {
@@ -276,13 +281,12 @@ void AMatchGameMode::ResolveMoveToBudget(
         bOutClamped = true;
     }
 
-    // --- Networked debug draw (everyone sees it) ---
     if (AMatchGameState* S = GS())
     {
         const FColor Col = bOutClamped ? FColor::Yellow : FColor::Green;
         S->Multicast_DrawSphere(Start,      25.f, 16, Col,           6.f, 2.f);
-        S->Multicast_DrawSphere(WantedDest, 25.f, 16, FColor::Silver,6.f, 2.f); // requested
-        S->Multicast_DrawSphere(OutFinalDest,25.f,16, Col,           6.f, 2.f); // actual
+        S->Multicast_DrawSphere(WantedDest, 25.f, 16, FColor::Silver,6.f, 2.f);
+        S->Multicast_DrawSphere(OutFinalDest,25.f,16, Col,           6.f, 2.f);
         S->Multicast_DrawLine  (Start, OutFinalDest, Col, 6.f, 2.f);
         if (bOutClamped)
         {
@@ -298,7 +302,6 @@ bool AMatchGameMode::ValidateMove(AUnitBase* U, const FVector& Dest, float& OutS
 
     const FVector Start = U->GetActorLocation();
 
-    // Convert UE centimeters → tabletop inches using the global scale
     const float distCm   = FVector::Dist(Start, Dest);
     const float cmPerTTI = CmPerTabletopInch();
     const float distTTIn = distCm / cmPerTTI;
@@ -309,12 +312,10 @@ bool AMatchGameMode::ValidateMove(AUnitBase* U, const FVector& Dest, float& OutS
 
     if (AMatchGameState* S = GS())
     {
-        // world debug
         S->Multicast_DrawSphere(Start, 25.f, 16, Col, 10.f, 2.f);
         S->Multicast_DrawSphere(Dest,  25.f, 16, Col, 10.f, 2.f);
         S->Multicast_DrawLine  (Start, Dest, Col, 10.f, 2.f);
 
-        // screen text
         const FString Msg = FString::Printf(
             TEXT("[MoveCheck] Unit=%s  Dist=%.0f cm (%.1f TT-in)  Budget=%.1f TT-in  Max=%.1f TT-in  Scale=%.2f UE-in/TT-in (%.2f cm/TT-in)  -> %s"),
             *U->GetName(), distCm, distTTIn, U->MoveBudgetInches, U->MoveMaxInches,
@@ -335,17 +336,14 @@ void AMatchGameMode::Handle_MoveUnit(AMatchPlayerController* PC, AUnitBase* Unit
     if (PC->PlayerState != S->CurrentTurn) return;
     if (Unit->OwningPS != PC->PlayerState) return;
 
-    // Resolve clamped movement
     FVector finalDest = WantedDest;
     float   spentTTIn = 0.f;
     bool    bClamped  = false;
 
     ResolveMoveToBudget(Unit, WantedDest, finalDest, spentTTIn, bClamped);
 
-    // No budget left / no displacement
     if (spentTTIn <= KINDA_SMALL_NUMBER || finalDest.Equals(Unit->GetActorLocation(), 0.1f))
     {
-        // Still tell client they’re out of budget to clear drag/select if you like:
         if (Unit->MoveBudgetInches <= KINDA_SMALL_NUMBER && IsValid(PC))
         {
             PC->Client_OnMoveDenied_OverBudget(Unit, /*requested*/0.f, Unit->MoveBudgetInches);
@@ -353,10 +351,10 @@ void AMatchGameMode::Handle_MoveUnit(AMatchPlayerController* PC, AUnitBase* Unit
         return;
     }
 
-    // Spend and move
     Unit->MoveBudgetInches = FMath::Max(0.f, Unit->MoveBudgetInches - spentTTIn);
+    Unit->bMovedThisTurn = true;      // NEW: track moved for Heavy/Assault logic
     Unit->SetActorLocation(finalDest);
-    NotifyUnitTransformChanged(Unit);   // keep your auto-facing hook here if desired
+    NotifyUnitTransformChanged(Unit);
     Unit->ForceNetUpdate();
 
     if (AMatchGameState* S2 = GS())
@@ -368,11 +366,9 @@ void AMatchGameMode::Handle_MoveUnit(AMatchPlayerController* PC, AUnitBase* Unit
         S2->Multicast_ScreenMsg(Msg, bClamped ? FColor::Yellow : FColor::Green, 5.f);
     }
 
-    // Tell the initiating client it succeeded (you can add a 'bClamped' param if you want)
     if (IsValid(PC))
     {
         PC->Client_OnUnitMoved(Unit, spentTTIn, Unit->MoveBudgetInches);
-        // Or create a new RPC, e.g. Client_OnUnitMovedClamped(Unit, spentTTIn, Unit->MoveBudgetInches)
     }
 }
 
@@ -395,11 +391,9 @@ void AMatchGameMode::Handle_SelectTarget(AMatchPlayerController* PC, AUnitBase* 
     AMatchGameState* S = GS();
     if (!S || S->Phase != EMatchPhase::Battle || S->TurnPhase != ETurnPhase::Shoot) return;
 
-    // Only current player, and they can only select a target for their own attacker
     if (PC->PlayerState != S->CurrentTurn) return;
     if (Attacker->OwningPS != PC->PlayerState) return;
 
-    // Null/invalid target -> cancel preview
     if (!Target || !ValidateShoot(Attacker, Target))
     {
         if (S->Preview.Attacker == Attacker)
@@ -412,7 +406,6 @@ void AMatchGameMode::Handle_SelectTarget(AMatchPlayerController* PC, AUnitBase* 
             S->ActionPreview.SaveMod  = 0;
             S->ActionPreview.Cover    = ECoverType::None;
 
-            // Optional: revert to nearest enemy when canceling
             Attacker->FaceNearestEnemyInstant();
         }
         S->OnDeploymentChanged.Broadcast();
@@ -420,7 +413,6 @@ void AMatchGameMode::Handle_SelectTarget(AMatchPlayerController* PC, AUnitBase* 
         return;
     }
 
-    // Valid selection -> set preview and face the explicit target
     S->Preview.Attacker = Attacker;
     S->Preview.Target   = Target;
     S->Preview.Phase    = S->TurnPhase;
@@ -436,7 +428,6 @@ void AMatchGameMode::Handle_SelectTarget(AMatchPlayerController* PC, AUnitBase* 
     S->ActionPreview.SaveMod = static_cast<int8>(SaveMod);
     S->ActionPreview.Cover   = Cover;
 
-    // Face *the target* (not the nearest enemy)
     Attacker->FaceActorInstant(Target);
 
     S->OnDeploymentChanged.Broadcast();
@@ -453,97 +444,233 @@ void AMatchGameMode::Handle_ConfirmShoot(AMatchPlayerController* PC, AUnitBase* 
     if (Attacker->OwningPS != PC->PlayerState) return;
     if (!ValidateShoot(Attacker, Target)) return;
 
-    // -------- resolution (unchanged) --------
-    const int32 Models    = FMath::Max(0, Attacker->ModelsCurrent);
-    const int32 AttacksPM = FMath::Max(0, Attacker->GetAttacks());
-    const int32 TotalAtk  = Models * AttacksPM;
+    // 🔹 No DT lookups. Pull the already-replicated weapon (server authoritative anyway)
+    const FWeaponProfile& Weapon = Attacker->GetActiveWeaponProfile();
 
+    // ---- build your context ----
+    FAttackContext Ctx;
+    Ctx.Attacker          = Attacker;
+    Ctx.Target            = Target;
+    Ctx.Weapon            = &Weapon; // pointer is valid here
+    Ctx.RangeInches       = FVector::Dist(Attacker->GetActorLocation(), Target->GetActorLocation()) / CmPerTabletopInch();
+    Ctx.bAttackerMoved    = Attacker->bMovedThisTurn;
+    Ctx.bAttackerAdvanced = Attacker->bAdvancedThisTurn;
+
+    // base numbers (you can also use the cached reps if you prefer)
+    const int32 Models = FMath::Max(0, Attacker->ModelsCurrent);
+    Ctx.Attacks   = FMath::Max(0, Weapon.Attacks) * Models;
+    Ctx.HitNeed   = FMath::Clamp(Weapon.SkillToHit, 2, 6);
+    Ctx.WoundNeed = ToWoundTarget(Weapon.Strength, Target->GetToughness());
+    Ctx.AP        = FMath::Max(0, Weapon.AP);
+    Ctx.Damage    = FMath::Max(1, Weapon.Damage);
+
+    // Cover baseline (keywords/mods can override some effects like Ignores Cover)
     int32 HitMod = 0, SaveMod = 0;
     ECoverType Cover = ECoverType::None;
     QueryCover(Attacker, Target, HitMod, SaveMod, Cover);
 
-    int32 HitNeed = FMath::Clamp(Attacker->WeaponSkillToHitRep + (HitMod * -1), 2, 6);
+    // ===== Stage: PreHitCalc (keywords + unit mods) =====
+    {
+        FStageResult K = FKeywordProcessor::BuildForStage(Ctx, ECombatEvent::PreHitCalc);
+        FRollModifiers AMods = Attacker->CollectStageMods(ECombatEvent::PreHitCalc, /*bAsAttacker*/true, Target);
+        FRollModifiers TMods = Target  ->CollectStageMods(ECombatEvent::PreHitCalc, /*bAsAttacker*/false, Attacker);
+        FRollModifiers M = K.ModsNow; M.Accumulate(AMods); M.Accumulate(TMods);
 
-    const int32 Sval = Attacker->WeaponStrengthRep;
-    const int32 Dmg  = FMath::Max(1, Attacker->WeaponDamageRep);
-    const int32 AP   = FMath::Max(0, Attacker->WeaponAPRep);
+        Ctx.Attacks += M.AttacksDelta;
+        Ctx.HitNeed  = FMath::Clamp(Ctx.HitNeed + M.HitNeedOffset, 2, 6);
+        const bool bAutoHit = M.bAutoHit;
 
-    const int32 Tval     = Target->GetToughness();
+        Attacker->ConsumeForStage(ECombatEvent::PreHitCalc, true);
+        Target  ->ConsumeForStage(ECombatEvent::PreHitCalc, false);
+
+        // Apply cover hit mod AFTER keyword offsets (not affected by IgnoresCover)
+        Ctx.HitNeed = FMath::Clamp(Ctx.HitNeed + (HitMod * -1), 2, 6);
+
+        // Roll hits
+        if (bAutoHit)
+        {
+            Ctx.Hits = Ctx.Attacks;
+        }
+        else
+        {
+            for (int32 i=0; i<Ctx.Attacks; ++i)
+            {
+                const int32 r = D6();
+                if (r >= Ctx.HitNeed) ++Ctx.Hits;
+                Ctx.HitRolls.Add((uint8)r);
+            }
+        }
+
+        // PostHitRolls dice transforms (Sustained Hits, Lethal Hits)
+        // (Kept local here since these are *weapon* dice rules, not unit debuffs)
+        if (Ctx.Weapon)
+        {
+            // Sustained Hits X  (needs the Value => use FindKeyword)
+            if (const FWeaponKeywordData* SH =
+                    UWeaponKeywordHelpers::FindKeyword(*Ctx.Weapon, EWeaponKeyword::SustainedHits))
+            {
+                int32 Extra = 0;
+                for (uint8 r : Ctx.HitRolls)
+                {
+                    if (r >= Ctx.CritHitThreshold)
+                    {
+                        Extra += FMath::Max(0, SH->Value);
+                    }
+                }
+                Ctx.Hits += Extra;
+            }
+
+            // Lethal Hits (boolean check is enough => use HasKeyword)
+            if (UWeaponKeywordHelpers::HasKeyword(*Ctx.Weapon, EWeaponKeyword::LethalHits))
+            {
+                int32 AutoWounds = 0;
+                for (uint8 r : Ctx.HitRolls)
+                {
+                    if (r >= Ctx.CritHitThreshold)
+                    {
+                        ++AutoWounds;
+                    }
+                }
+                Ctx.Wounds += AutoWounds;
+            }
+        }
+    }
+
+    // ===== Stage: PreWoundCalc (unit mods; you can add reroll flags if desired) =====
+    {
+        FStageResult K = FKeywordProcessor::BuildForStage(Ctx, ECombatEvent::PreWoundCalc);
+        FRollModifiers AMods = Attacker->CollectStageMods(ECombatEvent::PreWoundCalc, true, Target);
+        FRollModifiers TMods = Target  ->CollectStageMods(ECombatEvent::PreWoundCalc, false, Attacker);
+        FRollModifiers M = K.ModsNow; M.Accumulate(AMods); M.Accumulate(TMods);
+
+        Ctx.WoundNeed = FMath::Clamp(Ctx.WoundNeed + M.WoundNeedOffset, 2, 6);
+
+        Attacker->ConsumeForStage(ECombatEvent::PreWoundCalc, true);
+        Target  ->ConsumeForStage(ECombatEvent::PreWoundCalc, false);
+
+        const int32 HitsNeedingWound = FMath::Max(0, Ctx.Hits - Ctx.Wounds); // subtract auto-wounds from Lethal
+        int32 NewWounds = 0;
+        for (int32 i=0; i<HitsNeedingWound; ++i)
+        {
+            const int32 r = D6();
+            if (r >= Ctx.WoundNeed) ++NewWounds;
+            Ctx.WoundRolls.Add((uint8)r);
+        }
+        Ctx.Wounds += NewWounds;
+
+        // PostWoundRolls dice transforms (Devastating Wounds -> no-save crits)
+        if (Ctx.Weapon && UWeaponKeywordHelpers::HasKeyword(*Ctx.Weapon, EWeaponKeyword::DevastatingWounds))
+        {
+            int32 Crits = 0;
+            for (uint8 r : Ctx.WoundRolls) if (r >= Ctx.CritWoundThreshold) ++Crits;
+            Ctx.CritWounds_NoSave += Crits;
+        }
+    }
+
+    // ===== Stage: PreSavingThrows (keywords + unit mods; AP, Damage, Ignores Cover) =====
+    bool bIgnoreCover = false;
+    {
+        FStageResult K = FKeywordProcessor::BuildForStage(Ctx, ECombatEvent::PreSavingThrows);
+        FRollModifiers AMods = Attacker->CollectStageMods(ECombatEvent::PreSavingThrows, true, Target);
+        FRollModifiers TMods = Target  ->CollectStageMods(ECombatEvent::PreSavingThrows, false, Attacker);
+        FRollModifiers M = K.ModsNow; M.Accumulate(AMods); M.Accumulate(TMods);
+
+        Ctx.AP     += M.APDelta;
+        Ctx.Damage += M.DamageDelta;
+        bIgnoreCover = M.bIgnoreCover;
+
+        Attacker->ConsumeForStage(ECombatEvent::PreSavingThrows, true);
+        Target  ->ConsumeForStage(ECombatEvent::PreSavingThrows, false);
+    }
+
     const int32 SaveBase = Target->GetSave();
+    int32 SaveNeed = ModifiedSaveNeed(SaveBase, Ctx.AP);
 
-    int32 SaveNeed = ModifiedSaveNeed(SaveBase, AP);
+    // If ignoring cover, drop the cover save bonus (leave hit mod intact)
+    if (bIgnoreCover) { SaveMod = 0; }
+
     SaveNeed = FMath::Clamp(SaveNeed - SaveMod, 2, 7);
     const bool bHasSave = (SaveNeed <= 6);
 
-    int32 hits = 0;
-    for (int i=0; i<TotalAtk; ++i)
-        if (D6() >= HitNeed) ++hits;
+    // Split normal vs no-save crit wounds
+    const int32 NormalWounds = FMath::Max(0, Ctx.Wounds - Ctx.CritWounds_NoSave);
 
-    const int32 WoundNeed = ToWoundTarget(Sval, Tval);
-
-    int32 wounds = 0;
-    for (int i=0; i<hits; ++i)
-        if (D6() >= WoundNeed) ++wounds;
-
-    int32 unsaved = 0;
+    int32 Unsaved = 0;
     if (bHasSave)
     {
-        for (int i=0; i<wounds; ++i)
-            if (D6() < SaveNeed) ++unsaved; // fail = unsaved
+        for (int i=0; i<NormalWounds; ++i)
+            if (D6() < SaveNeed) ++Unsaved; // fail = unsaved
     }
     else
     {
-        unsaved = wounds;
+        Unsaved = NormalWounds;
     }
 
-    const int32 totalDamage = unsaved * Dmg;
+    // Add crit-no-save wounds directly
+    Unsaved += Ctx.CritWounds_NoSave;
+
+    const int32 totalDamage = Unsaved * Ctx.Damage;
 
     // mark shooter as having shot right away
     Attacker->bHasShot = true;
     Attacker->ForceNetUpdate();
 
-    // aesthetic rotate (or use your VisualFaceActor if preferred)
+    // Rotate for aesthetics
     Attacker->FaceActorInstant(Target);
 
-    // LOS: count visible target models
+    // LOS: clamp damage by visible models
     const int32 TargetModels    = FMath::Max(0, Target->ModelsCurrent);
     const int32 VisibleModels   = CountVisibleTargetModels(Attacker, Target);
     const int32 WoundsPerModel  = Target->GetWoundsPerModel();
     const int32 MaxDamageByLOS  = VisibleModels * WoundsPerModel;
-
-    // Clamp the damage so we can't kill more models than are visible
-    const int32 ClampedDamage = FMath::Min(totalDamage, MaxDamageByLOS);
+    const int32 ClampedDamage   = FMath::Min(totalDamage, MaxDamageByLOS);
 
     // World-space debug location
     const FVector L0  = Attacker->GetActorLocation();
     const FVector L1  = Target->GetActorLocation();
     const FVector Mid = (L0 + L1) * 0.5f + FVector(0,0,150.f);
 
-    // Build the pre-message; we'll append actual models killed after damage lands
     const TCHAR* CoverTxt = CoverTypeToText(Cover);
-    const int32  savesMade = bHasSave ? (wounds - unsaved) : 0;
+    const int32 savesMade = bHasSave ? (NormalWounds - (Unsaved - Ctx.CritWounds_NoSave)) : 0;
 
     const FString Msg = FString::Printf(
-        TEXT("Hit: %d/%d\nWound: %d/%d\nSave: %d/%d (%s)\nLOS: %d/%d models visible (cap %d dmg)\nDamage rolled: %d -> applied: %d on impact"),
-        hits, TotalAtk,
-        wounds, hits,
-        savesMade, wounds, CoverTxt,
+        TEXT("Hit: %d/%d\nWound: %d/%d\nSave: %d/%d (%s%s)\nLOS: %d/%d models visible (cap %d dmg)\nDamage rolled: %d -> applied: %d on impact"),
+        Ctx.Hits, Ctx.Attacks,
+        Ctx.Wounds, Ctx.Hits,
+        savesMade, NormalWounds, CoverTxt, bIgnoreCover?TEXT(", ignores cover"):TEXT(""),
         VisibleModels, TargetModels, MaxDamageByLOS,
         totalDamage, ClampedDamage);
 
-    // 1) pick a single delay and use it everywhere
     const float ImpactDelay = Attacker->ImpactDelaySeconds;
 
-    // 2) multicast VFX/SFX with the SAME delay (be sure the function signature takes the float)
     Attacker->Multicast_PlayMuzzleAndImpactFX_AllModels(Target, ImpactDelay);
 
-    // 3) schedule damage and debug at impact time
+    // Schedule damage and debug at impact time
     FTimerDelegate Del;
     Del.BindUFunction(this, FName("ApplyDelayedDamageAndReport"),
                       Attacker, Target, ClampedDamage, Mid, Msg);
 
     FTimerHandle Tmp;
     GetWorld()->GetTimerManager().SetTimer(Tmp, Del, FMath::Max(0.f, ImpactDelay), false);
+
+    // ===== Stage: PostResolveAttack (mods-only side effects + grants) =====
+    {
+        FStageResult K = FKeywordProcessor::BuildForStage(Ctx, ECombatEvent::PostResolveAttack, /*DamageApplied*/ClampedDamage);
+        FRollModifiers AMods = Attacker->CollectStageMods(ECombatEvent::PostResolveAttack, true, Target);
+        FRollModifiers TMods = Target  ->CollectStageMods(ECombatEvent::PostResolveAttack, false, Attacker);
+        FRollModifiers M = K.ModsNow; M.Accumulate(AMods); M.Accumulate(TMods);
+
+        // Apply immediate effects as generic mods (no bespoke functions)
+        if (M.MortalDamageImmediateToOwner    > 0) { Attacker->ApplyMortalDamage_Server(M.MortalDamageImmediateToOwner); }
+        if (M.MortalDamageImmediateToOpponent > 0) { Target  ->ApplyMortalDamage_Server(M.MortalDamageImmediateToOpponent); }
+
+        Attacker->ConsumeForStage(ECombatEvent::PostResolveAttack, true);
+        Target  ->ConsumeForStage(ECombatEvent::PostResolveAttack, false);
+
+        // Grants (time-boxed) — purely data-driven buffs/debuffs
+        for (const FUnitModifier& G : K.GrantsToAttacker) Attacker->AddUnitModifier(G);
+        for (const FUnitModifier& G : K.GrantsToTarget)   Target  ->AddUnitModifier(G);
+    }
 
     // clear preview now (or delay if you prefer)
     if (S->Preview.Attacker == Attacker)
@@ -571,7 +698,6 @@ int32 AMatchGameMode::CountVisibleTargetModels(const AUnitBase* Attacker, const 
         UStaticMeshComponent* TC = Target->ModelMeshes[j];
         if (!IsValid(TC)) continue;
 
-        // Aim at a stable point on the model (socket or small offset)
         FVector ModelPoint;
         if (TC->DoesSocketExist(Target->ImpactSocketName))
         {
@@ -582,7 +708,6 @@ int32 AMatchGameMode::CountVisibleTargetModels(const AUnitBase* Attacker, const 
             ModelPoint = TC->GetComponentTransform().TransformPosition(Target->ImpactOffsetLocal);
         }
 
-        // Pick the closest shooter model to this target model as origin
         const int32 ShooterIdx = Attacker->FindBestShooterModelIndex(ModelPoint);
         const FVector From = Attacker->GetMuzzleTransform(ShooterIdx).GetLocation();
         const FVector To   = ModelPoint;
@@ -595,7 +720,6 @@ int32 AMatchGameMode::CountVisibleTargetModels(const AUnitBase* Attacker, const 
         const bool bHit = World->LineTraceSingleByChannel(
             Hit, From, To, ECollisionChannel::ECC_GameTraceChannel3 /*LOS*/, Params);
 
-        // Visible if NOTHING blocks on LOS channel
         if (!bHit)
         {
             ++Visible;
@@ -638,7 +762,6 @@ bool AMatchGameMode::ComputeCoverBetween(const FVector& From, const FVector& To,
 
     const bool bHit = World->LineTraceSingleByChannel(Hit, From, To, CoverTraceChannel, Params);
 
-    // Draw basic result (center-to-center), color refined later by caller if needed
     if (bDebugCoverTraces)
         DrawCoverTrace(World, From, To, bHit ? FColor::Yellow : FColor::Red, 1.5f, 2.f);
 
@@ -663,9 +786,8 @@ bool AMatchGameMode::QueryCover(AUnitBase* A, AUnitBase* T,
     UWorld* World = GetWorld();
     if (!World) return false;
 
-    const float ProxCm = CoverProximityInches * CmPerTabletopInch(); // consistent global scale
+    const float ProxCm = CoverProximityInches * CmPerTabletopInch();
 
-    // ignore the two units
     FCollisionQueryParams Params(SCENE_QUERY_STAT(CoverTraceFull), false);
     Params.AddIgnoredActor(A);
     Params.AddIgnoredActor(T);
@@ -681,11 +803,10 @@ bool AMatchGameMode::QueryCover(AUnitBase* A, AUnitBase* T,
             return ECoverType::None;
         }
 
-        // We hit *something* on the cover channel; only count ACoverVolume, and only if near the target
         ACoverVolume* CV = Cast<ACoverVolume>(Hit.GetActor());
         if (!CV)
         {
-            if (bDebugCoverTraces) DrawCoverTrace(World, From, TargetPoint, FColor::Purple, 0.75f, 1.5f); // wrong object
+            if (bDebugCoverTraces) DrawCoverTrace(World, From, TargetPoint, FColor::Purple, 0.75f, 1.5f);
             return ECoverType::None;
         }
 
@@ -715,8 +836,8 @@ bool AMatchGameMode::QueryCover(AUnitBase* A, AUnitBase* T,
         if (ECoverType C = TraceOne(From, To); C != ECoverType::None)
         {
             OutType    = C;
-            OutSaveMod = 1;                 // +1 to save
-            if (C == ECoverType::High) OutHitMod = -1; // -1 to hit (we keep your sign convention)
+            OutSaveMod = 1;
+            if (C == ECoverType::High) OutHitMod = -1;
             return true;
         }
     }
@@ -761,16 +882,14 @@ void AMatchGameMode::Handle_CancelPreview(AMatchPlayerController* PC, AUnitBase*
     AMatchGameState* S = GS();
     if (!S || S->Phase != EMatchPhase::Battle) return;
 
-    // Only the active player, and only for their own unit
     if (PC->PlayerState != S->CurrentTurn) return;
     if (Attacker->OwningPS != PC->PlayerState) return;
 
-    // Only clear if the current preview is for this attacker
     if (S->Preview.Attacker == Attacker)
     {
         S->Preview.Attacker = nullptr;
         S->Preview.Target   = nullptr;
-        S->Preview.Phase    = S->TurnPhase; // keep phase consistent
+        S->Preview.Phase    = S->TurnPhase;
 
         S->OnDeploymentChanged.Broadcast();
         S->ForceNetUpdate();
@@ -803,7 +922,7 @@ void AMatchGameMode::PostLogin(APlayerController* NewPlayer)
         S->ForceNetUpdate();
     }
 
-    FinalizePlayerJoin(NewPlayer); // keep your flow
+    FinalizePlayerJoin(NewPlayer);
 }
 
 void AMatchGameMode::ResetUnitRoundStateFor(APlayerState* TurnOwner)
@@ -817,11 +936,12 @@ void AMatchGameMode::ResetUnitRoundStateFor(APlayerState* TurnOwner)
         {
             if (U->OwningPS == TurnOwner)
             {
-                // Movement
                 U->MoveBudgetInches = U->MoveMaxInches;
-                // Actions
                 U->bHasShot         = false;
+                U->bMovedThisTurn   = false;
+                U->bAdvancedThisTurn= false;
 
+                U->OnTurnAdvanced(); // decay turn-based unit mods
                 U->ForceNetUpdate();
             }
         }
@@ -848,18 +968,15 @@ bool AMatchGameMode::CanDeployAt(APlayerController* PC, const FVector& Location)
     const AMatchGameState* S = GetGameState<AMatchGameState>();
     if (!S || S->Phase != EMatchPhase::Deployment) return false;
 
-    // (Optional) enforce alternating: it must be this PC’s turn
     if (S->CurrentDeployer && PC->PlayerState != S->CurrentDeployer)
         return false;
 
-    // Team gate
     const ATabletopPlayerState* TPS = PC->GetPlayerState<ATabletopPlayerState>();
     const int32 Team = TPS ? TPS->TeamNum : 0;
     if (Team <= 0) return false;
 
     return ADeploymentZone::IsLocationAllowedForTeam(GetWorld(), Team, Location);
 }
-
 
 void AMatchGameMode::CopyRostersFromPlayerStates()
 {
@@ -932,7 +1049,6 @@ void AMatchGameMode::HandleRequestDeploy(APlayerController* PC, FName UnitId, co
 
     if (AMatchGameState* S = GS())
     {
-        // Must be your turn to deploy
         if (PC->PlayerState.Get() != S->CurrentDeployer) return;
 
         if (!CanDeployAt(PC, Where.GetLocation()))
@@ -941,14 +1057,12 @@ void AMatchGameMode::HandleRequestDeploy(APlayerController* PC, FName UnitId, co
             return;
         }
 
-        // Validate & decrement from remaining pool
         if (!DecrementOne(PC->PlayerState.Get(), UnitId))
         {
             UE_LOG(LogTemp, Warning, TEXT("Deploy denied: unit %s not available in remaining roster."), *UnitId.ToString());
             return;
         }
 
-        // ---- Resolve the unit row from the player's faction table ----
         const ATabletopPlayerState* TPS = Cast<ATabletopPlayerState>(PC->PlayerState.Get());
         if (!TPS)
         {
@@ -970,7 +1084,6 @@ void AMatchGameMode::HandleRequestDeploy(APlayerController* PC, FName UnitId, co
             return;
         }
 
-        // ---- Spawn the actor (class already resolved by faction/unit) ----
         TSubclassOf<AActor> SpawnClass = UnitClassFor(PC->PlayerState.Get(), UnitId);
         if (!*SpawnClass)
         {
@@ -987,15 +1100,11 @@ void AMatchGameMode::HandleRequestDeploy(APlayerController* PC, FName UnitId, co
             return;
         }
 
-        // ---- Initialize runtime state if it's a UnitBase ----
         if (AUnitBase* UB = Cast<AUnitBase>(Spawned))
         {
             UB->Server_InitFromRow(PC->PlayerState.Get(), *Row, Row->DefaultWeaponIndex);
             UB->FaceNearestEnemyInstant();
-            
             NotifyUnitTransformChanged(UB);
-            // Use DefaultWeaponIndex from the row (validated inside Server_InitFromRow if needed)
-          
         }
         else
         {
@@ -1003,7 +1112,6 @@ void AMatchGameMode::HandleRequestDeploy(APlayerController* PC, FName UnitId, co
                    *SpawnClass->GetName(), *UnitId.ToString());
         }
 
-        // ---- Alternate or keep turn based on remaining pools ----
         APlayerState* Other = (PC->PlayerState.Get() == S->P1) ? S->P2 : S->P1;
         const bool bSelfLeft  = AnyRemainingFor(PC->PlayerState.Get());
         const bool bOtherLeft = AnyRemainingFor(Other);
@@ -1045,7 +1153,6 @@ void AMatchGameMode::HandleStartBattle(APlayerController* PC)
         S->TurnInRound = 0;
         S->TurnPhase   = ETurnPhase::Move;
 
-        // TODO Random??
         S->CurrentTurn = S->CurrentDeployer;
         if (AMatchGameMode* GM = GetWorld()->GetAuthGameMode<AMatchGameMode>())
             GM->ResetUnitRoundStateFor(S->CurrentTurn);
@@ -1053,7 +1160,6 @@ void AMatchGameMode::HandleStartBattle(APlayerController* PC)
         S->OnDeploymentChanged.Broadcast();
         S->ForceNetUpdate();
 
-        // Kick both clients to refresh (optional)
         for (FConstPlayerControllerIterator It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
             if (AMatchPlayerController* MPC = Cast<AMatchPlayerController>(*It))
                 MPC->Client_KickPhaseRefresh();
@@ -1065,7 +1171,7 @@ void AMatchGameMode::HandleEndPhase(APlayerController* PC)
     if (!HasAuthority() || !PC) return;
     AMatchGameState* S = GS();
     if (!S || S->Phase != EMatchPhase::Battle) return;
-    if (PC->PlayerState != S->CurrentTurn) return; // only active player may advance
+    if (PC->PlayerState != S->CurrentTurn) return;
 
     auto Broadcast = [&]()
     {
@@ -1073,7 +1179,6 @@ void AMatchGameMode::HandleEndPhase(APlayerController* PC)
         S->ForceNetUpdate();
     };
 
-    // Move -> Shoot -> (end turn)
     if (S->TurnPhase == ETurnPhase::Move)
     {
         S->TurnPhase = ETurnPhase::Shoot;
@@ -1081,8 +1186,6 @@ void AMatchGameMode::HandleEndPhase(APlayerController* PC)
         return;
     }
 
-    // End of Shoot -> end of this player's turn
-    // If first player in round just ended, switch to other player.
     if (S->TurnInRound == 0)
     {
         S->TurnInRound = 1;
@@ -1093,13 +1196,19 @@ void AMatchGameMode::HandleEndPhase(APlayerController* PC)
         return;
     }
 
-    // Second player ended → next round, or end game
+    // round wrap
     S->CurrentRound = FMath::Clamp<uint8>(S->CurrentRound + 1, 1, S->MaxRounds);
     S->TurnInRound  = 0;
 
     ScoreObjectivesForRound();
     S->OnDeploymentChanged.Broadcast();
     S->ForceNetUpdate();
+
+    // Decay per-round modifiers on *all* units
+    for (TActorIterator<AUnitBase> It(GetWorld()); It; ++It)
+    {
+        if (AUnitBase* U = *It) U->OnRoundAdvanced();
+    }
 
     if (S->CurrentRound > S->MaxRounds)
     {
@@ -1108,7 +1217,6 @@ void AMatchGameMode::HandleEndPhase(APlayerController* PC)
         return;
     }
 
-    // Next round starts with the other player than who just ended
     S->CurrentTurn = OtherPlayer(S->CurrentTurn);
     S->TurnPhase   = ETurnPhase::Move;
     ResetUnitRoundStateFor(S->CurrentTurn);
@@ -1123,7 +1231,6 @@ void AMatchGameMode::ScoreObjectivesForRound()
 
     int32 P1Delta = 0, P2Delta = 0;
 
-    // If you cached objectives on GS, iterate those; otherwise iterate world
     TArray<AObjectiveMarker*> Objectives;
     for (TActorIterator<AObjectiveMarker> It(GetWorld()); It; ++It)
         Objectives.Add(*It);
@@ -1132,7 +1239,6 @@ void AMatchGameMode::ScoreObjectivesForRound()
     {
         if (!Obj) continue;
 
-        // Recompute from current unit positions (server)
         Obj->RecalculateControl();
 
         APlayerState* Controller = Obj->GetControllingPlayerState();
@@ -1175,7 +1281,6 @@ void AMatchGameMode::ApplyDelayedDamageAndReport(AUnitBase* Attacker, AUnitBase*
         Target->ApplyDamage_Server(TotalDamage);
     }
 
-    // show the text at impact time (optional—move earlier if you prefer instant feedback)
     S->Multicast_DrawShotDebug(DebugMid, DebugMsg, FColor::Black, 8.f);
 
     S->OnDeploymentChanged.Broadcast();
@@ -1198,7 +1303,6 @@ void AMatchGameMode::FinalizePlayerJoin(APlayerController* PC)
         if (!S->P1)                    S->P1 = TPS;
         else if (!S->P2 && S->P1 != TPS) S->P2 = TPS;
 
-        // One-time init once both present
         if (S->P1 && S->P2 && !S->bTeamsAndTurnsInitialized)
         {
             CopyRostersFromPlayerStates();
@@ -1227,7 +1331,6 @@ void AMatchGameMode::FinalizePlayerJoin(APlayerController* PC)
     }
 }
 
-
 void AMatchGameMode::TallyObjectives_EndOfRound()
 {
     AMatchGameState* GS = GetGameState<AMatchGameState>();
@@ -1244,7 +1347,7 @@ void AMatchGameMode::TallyObjectives_EndOfRound()
         for (TActorIterator<AUnitBase> It(GetWorld()); It; ++It)
         {
             AUnitBase* U = *It;
-            if (!U || !U->OwningPS) continue; // use whatever you already store for ownership
+            if (!U || !U->OwningPS) continue;
 
             const int32 OC = U->GetObjectiveControlAt(Obj);
             if (OC <= 0) continue;
@@ -1266,6 +1369,5 @@ void AMatchGameMode::TallyObjectives_EndOfRound()
     GS->ScoreP1 += RoundP1;
     GS->ScoreP2 += RoundP2;
 
-    // You already broadcast UI updates; reuse your existing multicast
     GS->OnDeploymentChanged.Broadcast();
 }

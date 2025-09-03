@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "WeaponKeywords.h"
 #include "Engine/DataTable.h"
 #include "UObject/Object.h"
 #include "ArmyData.generated.h"
@@ -54,6 +55,7 @@ struct FWeaponProfile
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32   Strength = 4;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32   AP = 0;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32   Damage = 1;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) TArray<FWeaponKeywordData> Keywords;
 };
 
 USTRUCT(BlueprintType)
