@@ -9,7 +9,14 @@
 static FString SafeName(APlayerState* PS)
 {
     if (!PS) return FString();
-    const FString N = PS->GetPlayerName();
+    FString N = PS->GetPlayerName();
+    if (N.IsEmpty())
+    {
+        if (const ATabletopPlayerState* TPS = Cast<ATabletopPlayerState>(PS))
+        {
+            N = TPS->DisplayName;
+        }
+    }
     return N.IsEmpty() ? TEXT("Player") : N;
 }
 
@@ -54,6 +61,11 @@ void ASetupGamemode::UpdateCachedPlayerNames()
     }
 }
 
+void ASetupGameState::OnRep_PlayerNames()
+{
+    OnPlayerSlotsChanged.Broadcast();
+}
+
 static int32 FindIndexByUnit(const TArray<FUnitCount>& Roster, FName UnitId)
 {
     for (int32 i=0; i<Roster.Num(); ++i)
@@ -85,8 +97,8 @@ void ASetupGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutL
 
     DOREPLIFETIME(ASetupGameState, Player1);
     DOREPLIFETIME(ASetupGameState, Player2);
-    DOREPLIFETIME(ASetupGameState, Player1Name);
-    DOREPLIFETIME(ASetupGameState, Player2Name);
+    DOREPLIFETIME_CONDITION_NOTIFY(ASetupGameState, Player1Name, COND_None, REPNOTIFY_Always);
+    DOREPLIFETIME_CONDITION_NOTIFY(ASetupGameState, Player2Name, COND_None, REPNOTIFY_Always);
     DOREPLIFETIME(ASetupGameState, bP1Ready);
     DOREPLIFETIME(ASetupGameState, bP2Ready);
     DOREPLIFETIME(ASetupGameState, Phase);

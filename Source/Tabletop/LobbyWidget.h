@@ -24,14 +24,29 @@ protected:
 	UPROPERTY(meta=(BindWidget)) UEditableTextBox* P2Name = nullptr;
 	UPROPERTY(meta=(BindWidget)) UButton* BothReady = nullptr;
 
+	UPROPERTY(meta=(BindWidgetOptional)) UButton* InviteButton = nullptr;
+	
+	UPROPERTY(meta=(BindWidgetOptional)) UEditableTextBox* LobbyStatusBox = nullptr;
+
 private:
 	UFUNCTION() void OnP1ReadyClicked();
 	UFUNCTION() void OnP2ReadyClicked();
 	UFUNCTION() void OnBothReadyClicked();
-
+	UFUNCTION() void OnInviteClicked();
+	
 	class ASetupGameState* GetSetupGS() const;
 	class ASetupPlayerController* GetSetupPC() const;
+	
+	UFUNCTION(BlueprintCallable)
+	void ShowSteamInviteUI();
 
+	FTimerHandle LobbyStatusRefreshHandle;
+
+	void UpdateLobbyStatusSummary();
+	void SetLobbyStatus(const FString& Text);
+	void AppendLobbyStatusLine(const FString& Line);
+	FString CurrentWorldPackage() const;
+	
 	UFUNCTION()
 	void RefreshFromState();      // updates all texts / enables
 	void ApplySeatPermissions();  // who can click what

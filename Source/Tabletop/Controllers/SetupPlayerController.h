@@ -18,6 +18,9 @@ public:
 
 	UFUNCTION(Server, Reliable, BlueprintCallable)
 	void Server_AdvanceFromLobby();
+
+	UFUNCTION(Server, Reliable)
+	void Server_SetDisplayName(const FString& InName);
 	
 	virtual void BeginPlay() override;
 	
@@ -44,6 +47,9 @@ public:
 
 	UFUNCTION(Server, Reliable, BlueprintCallable)
 	void Server_AdvanceFromMap();
+
+	UFUNCTION(Server, Reliable)
+	void Server_RequestLobbySync();
 	
 private:
 	UPROPERTY()

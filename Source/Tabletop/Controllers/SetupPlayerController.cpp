@@ -1,9 +1,12 @@
 
 #include "SetupPlayerController.h"
-
+#include "Interfaces/OnlineIdentityInterface.h"
+#include "OnlineSubsystem.h"
 #include "Blueprint/UserWidget.h"
+#include "GameFramework/PlayerState.h"
 #include "Tabletop/SetupWidget.h"
 #include "Tabletop/Gamemodes/SetupGamemode.h"
+#include "Tabletop/PlayerStates/TabletopPlayerState.h"
 
 void ASetupPlayerController::Server_SetReady_Implementation(bool bReady)
 {
@@ -25,6 +28,31 @@ void ASetupPlayerController::BeginPlay()
 {
 	Super::BeginPlay();
 
+	if (IsLocalController())
+	{
+		// 1) Pull platform/Steam nickname
+		FString Nickname;
+
+		if (IOnlineSubsystem* OSS = IOnlineSubsystem::Get())
+		{
+			IOnlineIdentityPtr Identity = OSS->GetIdentityInterface();
+			if (Identity.IsValid())
+			{
+				// Local user 0 is fine for typical setups
+				Nickname = Identity->GetPlayerNickname(0);
+			}
+		}
+
+		if (Nickname.IsEmpty())
+		{
+			// sensible fallback
+			Nickname = FString::Printf(TEXT("Player_%d"), GetLocalPlayer() ? GetLocalPlayer()->GetControllerId() : 0);
+		}
+
+		// 2) Tell the server to store it on our PlayerState
+		Server_SetDisplayName(Nickname);
+	}
+
 	if (IsLocalController() && SetupWidgetClass)
 	{
 		SetupWidgetInstance = CreateWidget<USetupWidget>(this, SetupWidgetClass);
@@ -41,6 +69,42 @@ void ASetupPlayerController::BeginPlay()
 			SetInputMode(Mode);
 			
 		}
+	}
+
+	if (IsLocalController())
+	{
+		Server_RequestLobbySync();
+	}
+}
+
+void ASetupPlayerController::Server_RequestLobbySync_Implementation()
+{
+	if (ASetupGamemode* GM = GetWorld()->GetAuthGameMode<ASetupGamemode>())
+	{
+		GM->UpdateCachedPlayerNames();             // fills Player1Name/Player2Name
+		if (ASetupGameState* S = GM->GetGameState<ASetupGameState>())
+		{
+			S->OnPlayerSlotsChanged.Broadcast();   // host-side UI
+			S->ForceNetUpdate();                   // replicate to everyone
+		}
+	}
+}
+
+void ASetupPlayerController::Server_SetDisplayName_Implementation(const FString& InName)
+{
+	if (APlayerState* PS = PlayerState)
+	{
+		PS->SetPlayerName(InName);
+		if (ATabletopPlayerState* TPS = Cast<ATabletopPlayerState>(PS))
+		{
+			TPS->DisplayName = InName;
+		}
+	}
+
+	// Ask GM to recache & replicate the lobby slot strings
+	if (ASetupGamemode* GM = GetWorld()->GetAuthGameMode<ASetupGamemode>())
+	{
+		GM->UpdateCachedPlayerNames();
 	}
 }
 

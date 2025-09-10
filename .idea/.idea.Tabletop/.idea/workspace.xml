@@ -13,8 +13,26 @@
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
     <option name="LAST_RESOLUTION" value="IGNORE" />
   </component>
+  <component name="HighlightingSettingsPerFile">
+    <setting file="file://$PROJECT_DIR$/Plugins/AdvancedSessions/Source/AdvancedSessions/AdvancedSessions.Build.cs" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Plugins/AdvancedSteamSessions/Source/AdvancedSteamSessions/AdvancedSteamSessions.Build.cs" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Source/Tabletop/Controllers/SetupPlayerController.cpp" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Source/Tabletop/Controllers/SetupPlayerController.h" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Source/Tabletop/Gamemodes/SetupGamemode.cpp" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Source/Tabletop/LobbyWidget.cpp" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Source/Tabletop/MenuWidget.cpp" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Source/Tabletop/MenuWidget.h" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Source/Tabletop/Tabletop.Build.cs" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Source/Tabletop/TabletopGameInstance.cpp" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Source/Tabletop/TabletopGameInstance.h" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Source/TabletopEditor.Target.cs" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$USER_HOME$/UE_5.5/Engine/Plugins/Online/OnlineBase/Source/Public/Online/OnlineSessionNames.h" root0="FORCE_HIGHLIGHTING" />
+  </component>
   <component name="MarkdownSettingsMigration">
     <option name="stateVersion" value="1" />
+  </component>
+  <component name="ProblemsViewState">
+    <option name="selectedTabId" value="CurrentFile" />
   </component>
   <component name="ProjectId" id="31aselJZKHroTzhPBow7QTtwVt6" />
   <component name="ProjectViewState">
@@ -28,6 +46,7 @@
     &quot;WebServerToolWindowFactoryState&quot;: &quot;false&quot;,
     &quot;XThreadsFramesViewSplitterKey&quot;: &quot;0.49772105&quot;,
     &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;preferences.keymap&quot;,
     &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
   }
 }</component>
@@ -380,6 +399,23 @@
         <option name="Build" />
       </method>
     </configuration>
+    <configuration name="Standalone" type="RunNativeExe" factoryName="Native Executable">
+      <option name="EXE_PATH" value="$USER_HOME$/UE_5.5/Engine/Binaries/Win64/UnrealEditor.exe" />
+      <option name="PROGRAM_PARAMETERS" value="&quot;$PROJECT_DIR$/Tabletop.uproject&quot; Game/Content/Maps/L_Menu -game -PIEVIACONSOLE -Multiprocess GameUserSettingsINI=&quot;PIEGameUserSettings0&quot; -MultiprocessSaveConfig -forcepassthrough -messaging -SessionName=&quot;Play in Standalone Game&quot; -windowed -ResX=1280 -ResY=720` -steam" />
+      <option name="WORKING_DIRECTORY" value="$USER_HOME$/UE_5.5" />
+      <option name="PASS_PARENT_ENVS" value="1" />
+      <option name="USE_EXTERNAL_CONSOLE" value="0" />
+      <method v="2">
+        <option name="Build" default="false" projectName="Tabletop" projectPath="file://$PROJECT_DIR$/Intermediate/ProjectFiles/Tabletop.vcxproj" />
+      </method>
+    </configuration>
+    <list>
+      <item itemvalue=".NET Project.AutomationTool" />
+      <item itemvalue=".NET Project.UnrealBuildTool" />
+      <item itemvalue="C++ Project.Tabletop" />
+      <item itemvalue="C++ Project.UE5" />
+      <item itemvalue="Native Executable.Standalone" />
+    </list>
   </component>
   <component name="SpellCheckerSettings" RuntimeDictionaries="0" Folders="0" CustomDictionaries="0" DefaultDictionary="application-level" UseSingleDictionary="true" transferred="true" />
   <component name="TaskManager">
@@ -408,7 +444,13 @@
       <workItem from="1756886398473" duration="2647000" />
       <workItem from="1756905507227" duration="357000" />
       <workItem from="1756905939773" duration="1452000" />
-      <workItem from="1756907453012" duration="5779000" />
+      <workItem from="1756907453012" duration="6052000" />
+      <workItem from="1757321354521" duration="1285000" />
+      <workItem from="1757333858427" duration="594000" />
+      <workItem from="1757338829429" duration="4809000" />
+      <workItem from="1757408338864" duration="5293000" />
+      <workItem from="1757415657283" duration="20883000" />
+      <workItem from="1757494962128" duration="947000" />
     </task>
     <servers />
   </component>
@@ -418,5 +460,9 @@
   <component name="UnityUnitTestConfiguration" currentTestLauncher="NUnit" />
   <component name="VcsManagerConfiguration">
     <option name="CLEAR_INITIAL_COMMIT_MESSAGE" value="true" />
+  </component>
+  <component name="XSLT-Support.FileAssociations.UIState">
+    <expand />
+    <select />
   </component>
 </project>

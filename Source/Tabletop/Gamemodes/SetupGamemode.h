@@ -131,6 +131,9 @@ public:
 	void OnRep_PlayerSlots();
 
 	UFUNCTION()
+	void OnRep_PlayerNames();
+
+	UFUNCTION()
 	void OnRep_Rosters();
 
 	UFUNCTION()
