@@ -1,6 +1,6 @@
 
 #include "TabletopPlayerState.h"
-
+#include "Tabletop/NameUtils.h"
 #include "Tabletop/Gamemodes/MatchGameMode.h"
 
 static void BroadcastDeploymentChanged(UWorld* World)
@@ -10,6 +10,13 @@ static void BroadcastDeploymentChanged(UWorld* World)
 	{
 		GS->OnDeploymentChanged.Broadcast(); // local broadcast on this client/server instance
 	}
+}
+
+void ATabletopPlayerState::RefreshShortDisplayName(int32 MaxChars)
+{
+	const FString Raw = !DisplayName.IsEmpty() ? DisplayName : GetPlayerName();
+	ShortDisplayName = UNameUtils::CleanClamp(Raw, MaxChars);
+	ForceNetUpdate();
 }
 
 void ATabletopPlayerState::OnRep_PlayerIdentity()
@@ -30,6 +37,7 @@ void ATabletopPlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>&
 	DOREPLIFETIME(ATabletopPlayerState, SelectedFaction);
 	DOREPLIFETIME(ATabletopPlayerState, Roster);
 	DOREPLIFETIME(ATabletopPlayerState, TeamNum);
+	DOREPLIFETIME(ATabletopPlayerState, ShortDisplayName);
 }
 
 void ATabletopPlayerState::CopyProperties(APlayerState* PS)

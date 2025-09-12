@@ -25,7 +25,7 @@ static TSharedPtr<const FUniqueNetId> GetLocalUserId(UWorld* World)
     return nullptr;
 }
 
-static FORCEINLINE const TCHAR* YesNo(bool b) { return b ? TEXT("Yes") : TEXT("No"); }
+static FORCEINLINE const TCHAR* ResolveYesNo(bool b) { return b ? TEXT("Yes") : TEXT("No"); }
 
 
 static void HostTravelToListen(UWorld* World, const FString& LongPackageName)
@@ -226,7 +226,7 @@ void UMenuWidget::UpdateOssStatusSummary()
     // ---------- Build the summary ----------
     FString S;
     S += FString::Printf(TEXT("OSS            : %s\n"), *SubsystemName);
-    S += FString::Printf(TEXT("Identity Ready : %s\n"), YesNo(bIdentityReady));
+    S += FString::Printf(TEXT("Identity Ready : %s\n"), ResolveYesNo(bIdentityReady));
     S += FString::Printf(TEXT("User           : %s\n"), *UserNick);
     S += FString::Printf(TEXT("UniqueId       : %s\n"), *UserIdStr);
     S += FString::Printf(TEXT("DevAppId.ini   : %d\n"), DevAppIdCfg);
@@ -235,8 +235,8 @@ void UMenuWidget::UpdateOssStatusSummary()
     S += FString::Printf(TEXT("Intended Build : %d\n"), BuildIdIntended);
     S += FString::Printf(TEXT("Session Build  : %d\n"), BuildIdCurrent);
     S += FString::Printf(TEXT("Presence/Lobby : %s / %s\n"),
-                         YesNo(bWillUsePresence), YesNo(bWillUseLobbies));
-    S += FString::Printf(TEXT("LAN            : %s\n"), YesNo(bIsLan));
+                         ResolveYesNo(bWillUsePresence), ResolveYesNo(bWillUseLobbies));
+    S += FString::Printf(TEXT("LAN            : %s\n"), ResolveYesNo(bIsLan));
     S += FString::Printf(TEXT("Map (advert)   : %s\n"), *MapToAdvertise);
 
     // If a session exists, append a concise live snapshot

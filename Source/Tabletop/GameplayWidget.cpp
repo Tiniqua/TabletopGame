@@ -1,6 +1,7 @@
 
 #include "GameplayWidget.h"
 
+#include "NameUtils.h"
 #include "TurnContextWidget.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/Button.h"
@@ -12,6 +13,11 @@
 AMatchGameState* UGameplayWidget::GS() const
 {
     return GetWorld() ? GetWorld()->GetGameState<AMatchGameState>() : nullptr;
+}
+
+static FString NiceName(APlayerState* PS)
+{
+    return UNameUtils::GetShortPlayerName(PS); // replaces old logic
 }
 
 AMatchPlayerController* UGameplayWidget::MPC() const
@@ -93,13 +99,6 @@ void UGameplayWidget::UpdateTurnContextVisibility()
     // Visible iff battle + a unit selected; else collapse it
     TurnContext->SetVisibility((bBattle && bHasSel) ? ESlateVisibility::Visible
                                                     : ESlateVisibility::Collapsed);
-}
-
-static FString NiceName(APlayerState* PS)
-{
-    if (const ATabletopPlayerState* TPS = Cast<ATabletopPlayerState>(PS))
-        return TPS->DisplayName.IsEmpty() ? PS->GetPlayerName() : TPS->DisplayName;
-    return PS ? PS->GetPlayerName() : TEXT("");
 }
 
 static FString FactionName(APlayerState* PS)

@@ -54,10 +54,13 @@ void ASetupGamemode::UpdateCachedPlayerNames()
 {
     if (ASetupGameState* S = GS())
     {
-        S->Player1Name = SafeName(S->Player1);
-        S->Player2Name = SafeName(S->Player2);
-        S->OnPlayerSlotsChanged.Broadcast(); // host-side UI
-        S->ForceNetUpdate();                 // replicate to clients
+        const auto SafeName = [](APlayerState* PS){ return PS ? PS->GetPlayerName() : FString(); };
+
+        S->Player1Name = CleanAndClampName(SafeName(S->Player1), MaxPlayerNameChars);
+        S->Player2Name = CleanAndClampName(SafeName(S->Player2), MaxPlayerNameChars);
+
+        S->OnPlayerSlotsChanged.Broadcast();
+        S->ForceNetUpdate();
     }
 }
 
@@ -139,24 +142,28 @@ void ASetupGamemode::BeginPlay()
 void ASetupGamemode::PostLogin(APlayerController* NewPlayer)
 {
     Super::PostLogin(NewPlayer);
+
     if (ASetupGameState* S = GS())
     {
-        if (!S->Player1)
+        // Assign seat
+        if (!S->Player1)      S->Player1 = NewPlayer->PlayerState;
+        else if (!S->Player2) S->Player2 = NewPlayer->PlayerState;
+
+        // Clamp the PlayerState’s display name (replicates to everyone)
+        if (APlayerState* PS = NewPlayer->PlayerState)
         {
-            S->Player1 = NewPlayer->PlayerState;
-        }
-        else if (!S->Player2)
-        {
-            S->Player2 = NewPlayer->PlayerState;
+            const FString Raw = PS->GetPlayerName();                  // PIE/Steam name
+            const FString Clamped = CleanAndClampName(Raw, MaxPlayerNameChars);
+            PS->SetPlayerName(Clamped);                               // authoritative, replicates
         }
 
+        // (If you keep a custom DisplayName too)
         if (auto* TPS = NewPlayer->GetPlayerState<ATabletopPlayerState>())
         {
-            TPS->DisplayName = SafeName(TPS); // TPS->GetPlayerName()
+            TPS->DisplayName = CleanAndClampName(TPS->GetPlayerName(), MaxPlayerNameChars);
         }
 
-        
-        UpdateCachedPlayerNames();
+        UpdateCachedPlayerNames();   // also clamps; see next step
         S->OnPhaseChanged.Broadcast();
         S->ForceNetUpdate();
     }
@@ -214,6 +221,22 @@ void ASetupGamemode::HandleSelectMap(APlayerController* PC, FName MapRow)
             S->ForceNetUpdate();
         }
     }
+}
+
+FString ASetupGamemode::CleanAndClampName(const FString& In, int32 MaxChars)
+{
+    FString S = In;
+    S.TrimStartAndEndInline();
+    // collapse control chars to spaces
+    S.ReplaceInline(TEXT("\r"), TEXT(" "));
+    S.ReplaceInline(TEXT("\n"), TEXT(" "));
+    S.ReplaceInline(TEXT("\t"), TEXT(" "));
+    if (S.IsEmpty()) S = TEXT("Player");
+    if (MaxChars > 0 && S.Len() > MaxChars)
+    {
+        S = S.Left(MaxChars); // simple clamp; good enough for dev
+    }
+    return S;
 }
 
 void ASetupGamemode::TryAdvanceFromMapSelection()
@@ -309,7 +332,7 @@ void ASetupGamemode::HandleSetUnitCount(APlayerController* PC, FName UnitRow, in
             if (const FUnitRow* Row = Units->FindRow<FUnitRow>(E.UnitId, TEXT("Recompute")))
                 if (E.Count > 0) Points += Row->Points * E.Count;
 
-        const int32 Cap = 1000;
+        const int32 Cap = 2000;
         if (bIsP1 && S->bP1Ready && Points > Cap) S->bP1Ready = false;
         if (bIsP2 && S->bP2Ready && Points > Cap) S->bP2Ready = false;
 
@@ -334,7 +357,7 @@ void ASetupGamemode::TryAdvanceFromUnitSelection()
     if (!HasAuthority()) return;
     if (ASetupGameState* S = GS())
     {
-        const int32 Cap = 1000;
+        const int32 Cap = 2000;
         const bool bBothUnderCap = (S->P1Points <= Cap) && (S->P2Points <= Cap);
         if (S->Phase == ESetupPhase::UnitSelection && AllPlayersReady() && bBothUnderCap)
         {

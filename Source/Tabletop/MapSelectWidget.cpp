@@ -1,4 +1,6 @@
 #include "MapSelectWidget.h"
+
+#include "NameUtils.h"
 #include "Components/TextBlock.h"
 #include "Components/ComboBoxString.h"
 #include "Components/Image.h"
@@ -146,8 +148,8 @@ void UMapSelectWidget::RefreshFromState()
     if (!S || !LPC) return;
 
     // Names
-    if (P1Name) P1Name->SetText(FText::FromString(S->Player1 ? S->Player1->GetPlayerName() : TEXT("---")));
-    if (P2Name) P2Name->SetText(FText::FromString(S->Player2 ? S->Player2->GetPlayerName() : TEXT("---")));
+    if (P1Name) P1Name->SetText(FText::FromString(UNameUtils::GetShortPlayerName(S->Player1)));
+    if (P2Name) P2Name->SetText(FText::FromString(UNameUtils::GetShortPlayerName(S->Player2)));
 
     // Faction names
     if (P1FactionText) P1FactionText->SetText(FText::FromString(FactionDisplay(S->P1Faction)));

@@ -198,6 +198,11 @@ public:
 	UFUNCTION(BlueprintCallable)
 	void TryAdvanceFromMapSelection();
 
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Lobby")
+	int32 MaxPlayerNameChars = 12; // tweak in defaults
+
+	static FString CleanAndClampName(const FString& In, int32 MaxChars);
+
 protected:
 	virtual void PostLogin(APlayerController* NewPlayer) override;
 	virtual void Logout(AController* Exiting) override;

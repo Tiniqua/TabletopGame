@@ -1,6 +1,7 @@
 
 #include "UnitSelectionWidget.h"
 
+#include "NameUtils.h"
 #include "UnitRowWidget.h"
 #include "Components/Button.h"
 #include "Components/EditableTextBox.h"
@@ -105,8 +106,8 @@ void UUnitSelectionWidget::RefreshFromState()
     ASetupPlayerController* LPC = PC();
     if (!S || !LPC) return;
 
-    if (P1Name) P1Name->SetText(FText::FromString(S->Player1 ? S->Player1->GetPlayerName() : TEXT("---")));
-    if (P2Name) P2Name->SetText(FText::FromString(S->Player2 ? S->Player2->GetPlayerName() : TEXT("---")));
+    if (P1Name) P1Name->SetText(FText::FromString(UNameUtils::GetShortPlayerName(S->Player1)));
+    if (P2Name) P2Name->SetText(FText::FromString(UNameUtils::GetShortPlayerName(S->Player2)));
 
     if (P1PointsText) P1PointsText->SetText(FText::AsNumber(S->P1Points));
     if (P2PointsText) P2PointsText->SetText(FText::AsNumber(S->P2Points));
@@ -115,7 +116,7 @@ void UUnitSelectionWidget::RefreshFromState()
     const bool bLocalIsP2 = (LPC->PlayerState && LPC->PlayerState == S->Player2);
 
     // Ready buttons: only your seat; disabled if over cap
-    const int32 Cap = 1000;
+    const int32 Cap = 2000;
     if (P1ReadyBtn) P1ReadyBtn->SetIsEnabled(bLocalIsP1 && S->P1Points <= Cap);
     if (P2ReadyBtn) P2ReadyBtn->SetIsEnabled(bLocalIsP2 && S->P2Points <= Cap);
 
@@ -133,14 +134,14 @@ void UUnitSelectionWidget::OnP1ReadyClicked()
 {
     if (ASetupGameState* S = GS())
     if (ASetupPlayerController* LPC = PC())
-    if (LPC->PlayerState == S->Player1 && S->P1Points <= 1000)
+    if (LPC->PlayerState == S->Player1 && S->P1Points <= 2000)
         LPC->Server_SetReady(!S->bP1Ready);
 }
 void UUnitSelectionWidget::OnP2ReadyClicked()
 {
     if (ASetupGameState* S = GS())
     if (ASetupPlayerController* LPC = PC())
-    if (LPC->PlayerState == S->Player2 && S->P2Points <= 1000)
+    if (LPC->PlayerState == S->Player2 && S->P2Points <= 2000)
         LPC->Server_SetReady(!S->bP2Ready);
 }
 void UUnitSelectionWidget::OnBothReadyClicked()
@@ -148,7 +149,7 @@ void UUnitSelectionWidget::OnBothReadyClicked()
     if (ASetupGameState* S = GS())
     if (ASetupPlayerController* LPC = PC())
     if (LPC->PlayerState == S->Player1 && S->bP1Ready && S->bP2Ready &&
-        S->P1Points <= 1000 && S->P2Points <= 1000)
+        S->P1Points <= 2000 && S->P2Points <= 2000)
     {
         LPC->Server_SnapshotSetupToPS();
         LPC->Server_AdvanceFromUnits();

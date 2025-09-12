@@ -2,6 +2,7 @@
 #include "DeploymentWidget.h"
 
 #include "DeployRowWidget.h"
+#include "NameUtils.h"
 #include "Components/Button.h"
 #include "Components/PanelWidget.h"
 #include "Components/TextBlock.h"
@@ -187,17 +188,9 @@ void UDeploymentWidget::RefreshFromState()
     APlayerController* OPC = GetOwningPlayer();
     if (!S || !OPC || !OPC->PlayerState) return;
 
-    // ---------- NEW: set name & faction labels ----------
     auto NiceName = [](APlayerState* PS)->FString
     {
-        if (!PS) return TEXT("");
-        if (const ATabletopPlayerState* TPS = Cast<ATabletopPlayerState>(PS))
-        {
-            if (!TPS->DisplayName.IsEmpty())
-                return TPS->DisplayName;
-        }
-        const FString EngineName = PS->GetPlayerName();
-        return EngineName;
+        return UNameUtils::GetShortPlayerName(PS);
     };
 
     auto FactionLabel = [&](APlayerState* PS)->FText

@@ -22,6 +22,13 @@ public:
 	UPROPERTY(Replicated, BlueprintReadOnly)
 	TArray<FUnitCount> Roster;
 
+	UPROPERTY(Replicated, BlueprintReadOnly, Category="Player")
+	FString ShortDisplayName;
+
+	UFUNCTION()
+	void RefreshShortDisplayName(int32 MaxChars = 16);
+
+
 	UFUNCTION()
 	void OnRep_PlayerIdentity();
 	

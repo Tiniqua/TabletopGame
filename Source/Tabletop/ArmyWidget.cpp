@@ -2,6 +2,7 @@
 #include "ArmyWidget.h"
 
 #include "ArmyData.h"
+#include "NameUtils.h"
 #include "Components/Button.h"
 #include "Components/ComboBoxString.h"
 #include "Components/TextBlock.h"
@@ -181,8 +182,8 @@ void UArmyWidget::RefreshFromState()
     ASetupPlayerController* LPC = PC();
     if (!S || !LPC) return;
 
-    const FString N1 = (S->Player1 ? S->Player1->GetPlayerName() : TEXT("---"));
-    const FString N2 = (S->Player2 ? S->Player2->GetPlayerName() : TEXT("---"));
+    const FString N1 = UNameUtils::GetShortPlayerName(S->Player1);
+    const FString N2 = UNameUtils::GetShortPlayerName(S->Player2);
     if (P1Name) P1Name->SetText(FText::FromString(N1));
     if (P2Name) P2Name->SetText(FText::FromString(N2));
 
