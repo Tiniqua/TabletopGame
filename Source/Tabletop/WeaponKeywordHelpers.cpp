@@ -5,7 +5,7 @@
 #include "Internationalization/Text.h" // NSLOCTEXT
 
 // -------- internal file-local helpers (not visible outside this .cpp) --------
-namespace
+namespace WeaponHelpers
 {
     FORCEINLINE float CmPerTTIn() { return 2.54f; }
     FORCEINLINE float DistInches(const FVector& A, const FVector& B) { return FVector::Dist(A, B) / CmPerTTIn(); }
@@ -178,7 +178,7 @@ void UWeaponKeywordHelpers::BuildKeywordUIInfos(
 
     const FWeaponProfile& W = Attacker->GetActiveWeaponProfile();
 
-    const bool bAtHalf   = WithinHalfRange(Attacker, Target, W);
+    const bool bAtHalf   = WeaponHelpers::WithinHalfRange(Attacker, Target, W);
     const bool bMoved    = Attacker->bMovedThisTurn;
     const bool bAdvanced = Attacker->bAdvancedThisTurn;
 
@@ -206,7 +206,7 @@ void UWeaponKeywordHelpers::BuildKeywordUIInfos(
 
         // Active only when cover actually improves the save in your rules
         case EWeaponKeyword::IgnoresCover:
-            bActive = HasAnyCoverSaveBonus(HitMod, SaveMod);
+            bActive = WeaponHelpers::HasAnyCoverSaveBonus(HitMod, SaveMod);
             // Optional: bCond = !bActive; // show as “would do something if target had cover”
             break;
 
