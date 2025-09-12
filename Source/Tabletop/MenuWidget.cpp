@@ -262,6 +262,25 @@ void UMenuWidget::UpdateOssStatusSummary()
     OssStatusBox->SetText(FText::FromString(S));
 }
 
+bool UMenuWidget::ShouldUseOnlineSubsystem() const
+{
+    if (!bUseOnlineSessions)
+    {
+        return false;
+    }
+
+    // In editor (PIE or Standalone launched from the editor), respect the toggle
+    #if WITH_EDITOR
+    if (GIsEditor && !bAllowSteamInEditor)
+    {
+        return false;
+    }
+#endif
+
+    // Otherwise, packaged (or allowed) => use OSS
+    return true;
+}
+
 FName UMenuWidget::NormalizeLevelName(const FString& LevelNameOrPath)
 {
     FString Trim = LevelNameOrPath;
@@ -426,15 +445,42 @@ FString UMenuWidget::ResolveJoinAddress() const
 
 void UMenuWidget::OnHostClicked()
 {
-    if (bUseOnlineSessions) { CreateSessionOrFallback(); }
-    else                    { OpenLobbyAsListen(); }
+    if (ShouldUseOnlineSubsystem())  { CreateSessionOrFallback(); }
+    else                             { OpenLobbyAsListen(); }
 }
 
 void UMenuWidget::OnJoinClicked()
 {
+    if (!ShouldUseOnlineSubsystem())
+    {
+        // Old local flow: read IP box (or default) and ClientTravel
+        if (APlayerController* PC = GetOwningPlayer())
+        {
+            FString Addr = ResolveJoinAddress().TrimStartAndEnd();
+            if (!Addr.Contains(TEXT(":")))
+            {
+                Addr += FString::Printf(TEXT(":%d"), kPort);
+            }
+            LastJoinAttempt = Addr;
+
+            if (EditText)   EditText->SetText(FText::FromString(FString::Printf(TEXT("%s (connecting…)"), *Addr)));
+            if (JoinButton) JoinButton->SetIsEnabled(false);
+
+            UE_LOG(LogTemp, Log, TEXT("ClientTravel (direct) to %s"), *Addr);
+            PC->ClientTravel(Addr, TRAVEL_Absolute);
+
+            if (UWorld* W = GetWorld())
+            {
+                W->GetTimerManager().ClearTimer(JoinTimeoutHandle);
+                W->GetTimerManager().SetTimer(JoinTimeoutHandle, this, &UMenuWidget::HandleJoinTimeout, JoinTimeoutSeconds, false);
+            }
+        }
+        return;
+    }
+
+    // Steam/OSS flow (unchanged)
     if (JoinButton) JoinButton->SetIsEnabled(false);
     if (EditText)   EditText->SetText(FText::FromString(TEXT("Searching Steam lobbies…")));
-
     ShowJoinDebugSnapshot(TEXT("OnJoinClicked(BeforeFind)"));
     FindSessions_Steam();
 }
@@ -558,6 +604,12 @@ void UMenuWidget::OpenLobbyAsListen()
 
 void UMenuWidget::CreateSessionOrFallback()
 {
+    if (!ShouldUseOnlineSubsystem())
+    {
+        OpenLobbyAsListen();
+        return;
+    }
+    
     IOnlineSubsystem* Subsystem = IOnlineSubsystem::Get();
     if (!Subsystem) { OpenLobbyAsListen(); return; }
 
@@ -679,6 +731,13 @@ void UMenuWidget::HandleCreateSessionComplete(FName InSessionName, bool bWasSucc
 
 void UMenuWidget::FindSessions_Steam()
 {
+    if (!ShouldUseOnlineSubsystem())
+    {
+        AppendOssStatusLine(TEXT("Info: OSS disabled in editor, skipping Steam search."));
+        if (JoinButton) JoinButton->SetIsEnabled(true);
+        return;
+    }
+    
     IOnlineSubsystem* Subsystem = IOnlineSubsystem::Get();
     if (!Subsystem) { UE_LOG(LogTemp, Warning, TEXT("FindSessions: No OSS.")); AppendOssStatusLine(TEXT("ERR: No Online Subsystem.")); goto DoneFail; }
 

@@ -60,6 +60,9 @@ public:
     FDelegateHandle FindSessionsCompleteHandle;
     FDelegateHandle JoinSessionCompleteHandle;
     FDelegateHandle DestroySessionCompleteHandle;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Networking|Editor")
+    bool bAllowSteamInEditor = false; 
     
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Networking")
     FString LobbyMapAssetPath = TEXT("/Game/Maps/L_PreGame");
@@ -178,6 +181,8 @@ protected:
     UEditableTextBox* MapPathBox = nullptr;
 
 private:
+    bool ShouldUseOnlineSubsystem() const;
+    
     static FName NormalizeLevelName(const FString& LevelNameOrPath);
     static FName PackageNameFromLevel(const ULevel* Level);
 
