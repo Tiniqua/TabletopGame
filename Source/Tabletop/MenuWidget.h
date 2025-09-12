@@ -12,21 +12,21 @@ class UButton;
 class UEditableTextBox;
 
 #ifndef SETTING_MAPNAME
-static const FName SETTING_MAPNAME(TEXT("MAPNAME"));
+static const FName xSETTING_MAPNAME(TEXT("MAPNAME"));
 #endif
 
 #ifndef SEARCH_KEYWORDS
-static const FName SEARCH_KEYWORDS(TEXT("SEARCH_KEYWORDS"));
+static const FName xSEARCH_KEYWORDS(TEXT("SEARCH_KEYWORDS"));
 #endif
 
 #ifndef SETTING_PRODUCT
-static const FName SETTING_PRODUCT(TEXT("PRODUCT"));  // custom metadata key
+static const FName xSETTING_PRODUCT(TEXT("PRODUCT"));  // custom metadata key
 #endif
 
 static const TCHAR* const kOurSearchTag = TEXT("Tabletop_Dev");
 
 
-static const FName SETTING_BUILDID(TEXT("BUILDID"));
+static const FName xSETTING_BUILDID(TEXT("BUILDID"));
 static const TCHAR* const kOurProduct  = TEXT("Tabletop");  
 
 USTRUCT(BlueprintType)

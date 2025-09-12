@@ -54,11 +54,11 @@ FString UMenuWidget::JoinResultToString(EOnJoinSessionCompleteResult::Type Resul
 FString UMenuWidget::SummarizeSearchResult(const FOnlineSessionSearchResult& R) const
 {
     const auto& S = R.Session;
-    FString MapVal; S.SessionSettings.Get(SETTING_MAPNAME, MapVal);
+    FString MapVal; S.SessionSettings.Get(xSETTING_MAPNAME, MapVal);
 
-    FString Product; S.SessionSettings.Get(SETTING_PRODUCT, Product);
-    int32   BuildMeta = -1; S.SessionSettings.Get(SETTING_BUILDID, BuildMeta);
-    FString Tag; S.SessionSettings.Get(SEARCH_KEYWORDS, Tag);
+    FString Product; S.SessionSettings.Get(xSETTING_PRODUCT, Product);
+    int32   BuildMeta = -1; S.SessionSettings.Get(xSETTING_BUILDID, BuildMeta);
+    FString Tag; S.SessionSettings.Get(xSEARCH_KEYWORDS, Tag);
 
     return FString::Printf(
         TEXT("Owner=%s Open=%d/%d Ping=%d BuildMeta=%d Tag=%s Product=%s Id=%s Map=%s"),
@@ -242,7 +242,7 @@ void UMenuWidget::UpdateOssStatusSummary()
     // If a session exists, append a concise live snapshot
     if (NS)
     {
-        FString MapKey;      NS->SessionSettings.Get(SETTING_MAPNAME, MapKey);
+        FString MapKey;      NS->SessionSettings.Get(xSETTING_MAPNAME, MapKey);
         const FString Owner = NS->OwningUserName;
         const int32   Open  = NS->NumOpenPublicConnections;
         const int32   Max   = NS->SessionSettings.NumPublicConnections;
@@ -595,13 +595,13 @@ void UMenuWidget::CreateSessionOrFallback()
     Settings.BuildUniqueId = IntendedBuildId; // keep for parity, but not used for search
 
     // Advertise our identifiers in lobby metadata:
-    Settings.Set(SEARCH_KEYWORDS, FString(kOurSearchTag), EOnlineDataAdvertisementType::ViaOnlineService);
-    Settings.Set(SETTING_PRODUCT,  FString(kOurProduct),   EOnlineDataAdvertisementType::ViaOnlineService);
-    Settings.Set(SETTING_BUILDID,  IntendedBuildId,        EOnlineDataAdvertisementType::ViaOnlineService);
+    Settings.Set(xSEARCH_KEYWORDS, FString(kOurSearchTag), EOnlineDataAdvertisementType::ViaOnlineService);
+    Settings.Set(xSETTING_PRODUCT,  FString(kOurProduct),   EOnlineDataAdvertisementType::ViaOnlineService);
+    Settings.Set(xSETTING_BUILDID,  IntendedBuildId,        EOnlineDataAdvertisementType::ViaOnlineService);
 
     // Never empty now:
     const FString MapToAdvertise = WillTravelTo.IsEmpty() ? TEXT("/Game/Maps/L_PreGame") : WillTravelTo;
-    Settings.Set(SETTING_MAPNAME, MapToAdvertise, EOnlineDataAdvertisementType::ViaOnlineService);
+    Settings.Set(xSETTING_MAPNAME, MapToAdvertise, EOnlineDataAdvertisementType::ViaOnlineService);
 
     TSharedPtr<const FUniqueNetId> UserId = GetLocalUserId(GetWorld());
     if (!UserId.IsValid())
@@ -707,9 +707,9 @@ void UMenuWidget::FindSessions_Steam()
     SessionSearch->QuerySettings.Set(SEARCH_LOBBIES,  true, EOnlineComparisonOp::Equals);
 
     // Only our game’s lobbies:
-    SessionSearch->QuerySettings.Set(SEARCH_KEYWORDS, FString(kOurSearchTag), EOnlineComparisonOp::Equals);
-    SessionSearch->QuerySettings.Set(SETTING_PRODUCT, FString(kOurProduct),   EOnlineComparisonOp::Equals);
-    SessionSearch->QuerySettings.Set(SETTING_BUILDID, IntendedBuildId,        EOnlineComparisonOp::Equals);
+    SessionSearch->QuerySettings.Set(xSEARCH_KEYWORDS, FString(kOurSearchTag), EOnlineComparisonOp::Equals);
+    SessionSearch->QuerySettings.Set(xSETTING_PRODUCT, FString(kOurProduct),   EOnlineComparisonOp::Equals);
+    SessionSearch->QuerySettings.Set(xSETTING_BUILDID, IntendedBuildId,        EOnlineComparisonOp::Equals);
     
 
     // Only return sessions with at least 1 open slot
@@ -750,7 +750,7 @@ TArray<FFoundSessionRow> UMenuWidget::GetLastSearchRows() const // ⭐ removed U
         Row.PingMs      = R.PingInMs;
 
         FString Map;
-        if (R.Session.SessionSettings.Get(SETTING_MAPNAME, Map))
+        if (R.Session.SessionSettings.Get(xSETTING_MAPNAME, Map))
         {
             Row.Map = Map;
         }
@@ -909,7 +909,7 @@ void UMenuWidget::HandleFindSessionsComplete(bool bWasSuccessful)
         for (int32 i=0;i<SessionSearch->SearchResults.Num();++i)
         {
             const auto& S = SessionSearch->SearchResults[i].Session;
-            FString MapVal; S.SessionSettings.Get(SETTING_MAPNAME, MapVal);
+            FString MapVal; S.SessionSettings.Get(xSETTING_MAPNAME, MapVal);
             UE_LOG(LogTemp, Log, TEXT("  [%d] Owner=%s Open=%d/%d Presence=%d Map='%s' LobbyId=%s"),
                 i, *S.OwningUserName, S.NumOpenPublicConnections,
                 S.SessionSettings.NumPublicConnections,
