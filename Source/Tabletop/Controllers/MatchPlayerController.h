@@ -51,6 +51,9 @@ public:
 	UFUNCTION(Client, Reliable)
 	void Client_OnAdvanced(AUnitBase* Unit, int32 BonusInches);
 
+	UFUNCTION(Server, Reliable)
+	void Server_SetGlobalSelectedUnit(AUnitBase* NewSel);
+
 
 	// Expose helpers for the widget to call
 	UFUNCTION(BlueprintCallable) void EnterTargetMode() { bTargetMode = true; }

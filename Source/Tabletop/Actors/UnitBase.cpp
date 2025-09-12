@@ -348,32 +348,44 @@ void AUnitBase::OnRoundAdvanced()
             ActiveCombatMods.RemoveAtSwap(i);
     }
 }
-
-/** Simple highlight toggle */
-void AUnitBase::SetHighlighted(bool bOn)
+void AUnitBase::ApplyOutlineToAllModels(UMaterialInterface* Mat)
 {
     for (UStaticMeshComponent* C : ModelMeshes)
     {
-        if (C)
-        {
-            C->SetRenderCustomDepth(bOn);
-        }
+        if (!IsValid(C)) continue;
+        C->SetOverlayMaterial(Mat);
     }
-    if (SelectCollision)
+}
+
+void AUnitBase::SetHighlightLocal(EUnitHighlight Mode)
+{
+    if (CurrentHighlight == Mode) return;
+    CurrentHighlight = Mode;
+
+    switch (Mode)
     {
-        SelectCollision->SetRenderCustomDepth(bOn);
+    case EUnitHighlight::Friendly:
+        ApplyOutlineToAllModels(OutlineFriendlyMaterial);
+        break;
+    case EUnitHighlight::Enemy:
+        ApplyOutlineToAllModels(OutlineEnemyMaterial);
+        break;
+    default:
+        ApplyOutlineToAllModels(nullptr);
+        break;
     }
 }
 
 void AUnitBase::OnSelected()
 {
-    SetHighlighted(true);
+    SetHighlightLocal(EUnitHighlight::Friendly);
 }
 
 void AUnitBase::OnDeselected()
 {
-    SetHighlighted(false);
+    SetHighlightLocal(EUnitHighlight::None);
 }
+
 
 void AUnitBase::OnRep_Models()
 {

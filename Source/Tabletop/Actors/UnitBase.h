@@ -13,6 +13,14 @@ class UStaticMesh;
 class ATabletopPlayerState;
 class UNiagaraSystem;
 
+UENUM(BlueprintType)
+enum class EUnitHighlight : uint8
+{
+    None      UMETA(DisplayName="None"),
+    Friendly  UMETA(DisplayName="Friendly"),
+    Enemy     UMETA(DisplayName="Enemy")
+};
+
 UCLASS()
 class TABLETOP_API AUnitBase : public AActor
 {
@@ -195,6 +203,10 @@ public:
     UFUNCTION(BlueprintPure, Category="VFX")
     int32 FindBestShooterModelIndex(const FVector& TargetWorld) const;
     
+    // Local-only visual toggle (safe on clients and listen server)
+    UFUNCTION(BlueprintCallable, Category="Selection|Outline")
+    void SetHighlightLocal(EUnitHighlight Mode);
+    
 protected:
     virtual void BeginPlay() override;
 
@@ -224,7 +236,19 @@ protected:
 
     UPROPERTY(EditDefaultsOnly, Category="Unit|Visual")
     float ModelSpacingApartCm = 80.f; // ~1.18 inches; tweak for your base sizes
+    
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Selection|Outline")
+    UMaterialInterface* OutlineFriendlyMaterial = nullptr;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Selection|Outline")
+    UMaterialInterface* OutlineEnemyMaterial = nullptr;
+
+    
 
 private:
-    void SetHighlighted(bool bOn);
+    TArray<UMaterialInstanceDynamic*> HighlightMIDs;
+    
+    void ApplyOutlineToAllModels(UMaterialInterface* Mat);
+
+    EUnitHighlight CurrentHighlight = EUnitHighlight::None;
 };

@@ -313,6 +313,18 @@ void AMatchPlayerController::Client_OnAdvanced_Implementation(AUnitBase* Unit, i
 	}
 }
 
+void AMatchPlayerController::Server_SetGlobalSelectedUnit_Implementation(AUnitBase* NewSel)
+{
+	if (AMatchGameState* S = GS())
+	{
+		if (S->CurrentTurn == PlayerState)
+		{
+			if (!NewSel || NewSel->OwningPS == PlayerState)
+				S->SetGlobalSelected(NewSel);
+		}
+	}
+}
+
 bool AMatchPlayerController::TraceDeployLocation(FHitResult& OutHit) const
 {
 	const ETraceTypeQuery TraceType =
@@ -409,8 +421,9 @@ void AMatchPlayerController::SelectUnit(AUnitBase* U)
 	if (SelectedUnit) SelectedUnit->OnSelected();
 
 	OnSelectedChanged.Broadcast(SelectedUnit);
-
 	SetSelectedUnit(U);
+
+	Server_SetGlobalSelectedUnit(U);
 }
 
 void AMatchPlayerController::ClearSelection()
@@ -418,8 +431,9 @@ void AMatchPlayerController::ClearSelection()
 	if (SelectedUnit) SelectedUnit->OnDeselected();
 	SelectedUnit = nullptr;
 	OnSelectedChanged.Broadcast(nullptr);
-
 	SetSelectedUnit(nullptr);
+
+	Server_SetGlobalSelectedUnit(nullptr);
 }
 
 

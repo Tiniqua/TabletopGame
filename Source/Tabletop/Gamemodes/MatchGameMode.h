@@ -91,7 +91,29 @@ UCLASS()
 class TABLETOP_API AMatchGameState : public AGameStateBase
 {
 	GENERATED_BODY()
+	
 public:
+
+	UPROPERTY(ReplicatedUsing=OnRep_SelectionVis)
+	AUnitBase* SelectedUnitGlobal = nullptr;
+
+	UPROPERTY(ReplicatedUsing=OnRep_SelectionVis)
+	AUnitBase* TargetUnitGlobal   = nullptr;
+
+	UFUNCTION()
+	void OnRep_SelectionVis();
+
+	UFUNCTION(NetMulticast, Reliable)
+	void Multicast_ApplySelectionVis(class AUnitBase* NewSel, class AUnitBase* NewTgt);
+	
+	UPROPERTY(Transient)
+	AUnitBase* LastSelApplied = nullptr;
+	UPROPERTY(Transient)
+	AUnitBase* LastTgtApplied = nullptr;
+
+	// Server-side setters (call these from GM/PC)
+	void SetGlobalSelected(AUnitBase* NewSel);
+	void SetGlobalTarget(AUnitBase* NewTarget);
 
 	UFUNCTION(NetMulticast, Reliable)
 	void Multicast_DrawShotDebug(const FVector& WorldLoc, const FString& Msg,
