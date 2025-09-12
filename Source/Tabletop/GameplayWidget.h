@@ -53,6 +53,15 @@ public:
 	UPROPERTY(meta=(BindWidget)) UButton* NextBtn = nullptr;
 	UPROPERTY(meta=(BindWidget)) UTextBlock* NextBtnLabel = nullptr;
 
+	UPROPERTY(EditDefaultsOnly, Category="UI")
+	TSubclassOf<UUserWidget> SummaryWidgetClass;
+
+	UFUNCTION(BlueprintCallable)
+	void ShowSummary();
+
+	UPROPERTY(meta=(BindWidgetOptional)) UButton* ViewSummaryBtn = nullptr;
+	UFUNCTION() void OnViewSummaryClicked();
+
 private:
 	TWeakObjectPtr<AMatchGameState> BoundGS;
 	TWeakObjectPtr<AMatchPlayerController> BoundPC;

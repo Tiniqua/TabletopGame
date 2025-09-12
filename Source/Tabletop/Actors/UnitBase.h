@@ -223,7 +223,7 @@ protected:
     float ModelScale = 1.0f;
 
     UPROPERTY(EditDefaultsOnly, Category="Unit|Visual")
-    float ModelSpacingCm = 30.f; // ~1.18 inches; tweak for your base sizes
+    float ModelSpacingApartCm = 80.f; // ~1.18 inches; tweak for your base sizes
 
 private:
     void SetHighlighted(bool bOn);

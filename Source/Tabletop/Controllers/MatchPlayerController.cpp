@@ -9,6 +9,7 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerStart.h"
 #include "Tabletop/LibraryHelpers.h"
+#include "Tabletop/MatchSummaryWidget.h"
 #include "Tabletop/TurnContextWidget.h"
 #include "Tabletop/Actors/UnitBase.h"
 #include "Tabletop/Gamemodes/MatchGameMode.h"
@@ -44,6 +45,16 @@ void AMatchPlayerController::BeginPlay()
 	}
 
 	RefreshPhaseUI();
+}
+
+void AMatchPlayerController::SetSelectedUnit(AUnitBase* NewSel)
+{
+	if (SelectedUnit == NewSel) return;
+	if (IsValid(SelectedUnit)) SelectedUnit->OnDeselected();
+	SelectedUnit = NewSel;
+	if (IsValid(SelectedUnit)) SelectedUnit->OnSelected();
+
+	OnSelectedChanged.Broadcast(SelectedUnit);
 }
 
 void AMatchPlayerController::Client_KickUIRefresh_Implementation()
@@ -137,25 +148,42 @@ void AMatchPlayerController::OnLeftClick()
     switch (S->TurnPhase)
     {
     case ETurnPhase::Move:
-    {
-        // If we have a friendly unit selected, a ground click is a move
-        if (SelectedUnit && SelectedUnit->OwningPS == PlayerState)
-        {
-        	FHitResult Hit;
-        	if (TraceGround_Battle(Hit))
-        	{
-        		Server_MoveUnit(SelectedUnit, Hit.ImpactPoint);
-        		return;
-        	}
-        }
-        // Otherwise try selecting a friendly unit
-        if (AUnitBase* U = TraceUnit())
-        {
-            if (U->OwningPS == PlayerState)
-                SelectUnit(U);
-        }
-        break;
-    }
+    	{
+    		// If we already have a unit selected and it's ours…
+    		if (SelectedUnit && SelectedUnit->OwningPS == PlayerState)
+    		{
+    			// First: did we click another friendly unit? If so, reselect instead of moving.
+    			if (AUnitBase* ClickedUnit = TraceUnit())
+    			{
+    				const bool bFriendly = (ClickedUnit->OwningPS == PlayerState);
+    				if (bFriendly && ClickedUnit != SelectedUnit)
+    				{
+    					SelectUnit(ClickedUnit);  // swaps selection; no move issued
+    					return;
+    				}
+    			}
+
+    			// Otherwise, treat as a ground click → attempt to move the selected unit
+    			FHitResult Hit;
+    			if (TraceGround_Battle(Hit))
+    			{
+    				Server_MoveUnit(SelectedUnit, Hit.ImpactPoint);
+    				return;
+    			}
+    			// If ground trace failed, fall through to selection attempt below
+    		}
+
+    		// No selected unit yet (or selected isn’t ours): try selecting a friendly unit under cursor
+    		if (AUnitBase* U = TraceUnit())
+    		{
+    			if (U->OwningPS == PlayerState)
+    			{
+    				SelectUnit(U);
+    				return;
+    			}
+    		}
+    		break;
+    	}
 
     case ETurnPhase::Shoot:
     {
@@ -183,6 +211,38 @@ void AMatchPlayerController::OnLeftClick()
     }
     default: break;
     }
+}
+
+void AMatchPlayerController::Client_ShowSummary_Implementation()
+{
+	if (!SummaryWidgetInstance && SummaryWidgetClass)
+	{
+		SummaryWidgetInstance = CreateWidget<UMatchSummaryWidget>(this, SummaryWidgetClass);
+	}
+	if (SummaryWidgetInstance)
+	{
+		if (AMatchGameState* S = GS())
+		{
+			SummaryWidgetInstance->AddToViewport(1000);
+			SummaryWidgetInstance->RefreshFromState(S);
+		}
+	}
+}
+
+void AMatchPlayerController::Client_HideSummary_Implementation()
+{
+	if (SummaryWidgetInstance)
+	{
+		SummaryWidgetInstance->RemoveFromParent();
+	}
+}
+
+// Return to menu from server (works for listen/clients)
+void AMatchPlayerController::Server_ExitToMainMenu_Implementation()
+{
+	// Option A: tell client to return to front end menu
+	ClientReturnToMainMenuWithTextReason(FText::FromString(TEXT("Match ended")));
+	// Option B (standalone): UGameplayStatics::OpenLevel(GetWorld(), FName("MainMenu"));
 }
 
 void AMatchPlayerController::Client_OnUnitMoved_Implementation(AUnitBase* Unit, float SpentTTIn, float NewBudgetTTIn)
@@ -295,14 +355,21 @@ void AMatchPlayerController::RefreshPhaseUI()
 	{
 		ShowWidgetTyped(DeploymentWidgetInstance, DeploymentWidgetClass, false);
 		ShowWidgetTyped(GameplayWidgetInstance,   GameplayWidgetClass,   false);
+		Client_HideSummary();
 		return;
 	}
 
 	const bool bDeployment = (State->Phase == EMatchPhase::Deployment);
 	const bool bBattle     = (State->Phase == EMatchPhase::Battle);
+	const bool bEnd        = (State->Phase == EMatchPhase::EndGame) && State->bShowSummary;
 
 	ShowWidgetTyped(DeploymentWidgetInstance, DeploymentWidgetClass, bDeployment);
-	ShowWidgetTyped(GameplayWidgetInstance,   GameplayWidgetClass,   bBattle);
+	ShowWidgetTyped(GameplayWidgetInstance,   GameplayWidgetClass,   bBattle && !bEnd);
+
+	if (bEnd)
+		Client_ShowSummary();
+	else
+		Client_HideSummary();
 
 	// Keep simple UI mode
 	FInputModeGameAndUI Mode;
@@ -342,6 +409,8 @@ void AMatchPlayerController::SelectUnit(AUnitBase* U)
 	if (SelectedUnit) SelectedUnit->OnSelected();
 
 	OnSelectedChanged.Broadcast(SelectedUnit);
+
+	SetSelectedUnit(U);
 }
 
 void AMatchPlayerController::ClearSelection()
@@ -349,6 +418,8 @@ void AMatchPlayerController::ClearSelection()
 	if (SelectedUnit) SelectedUnit->OnDeselected();
 	SelectedUnit = nullptr;
 	OnSelectedChanged.Broadcast(nullptr);
+
+	SetSelectedUnit(nullptr);
 }
 
 

@@ -49,6 +49,10 @@ void UGameplayWidget::NativeConstruct()
             TurnContext = Cast<UTurnContextWidget>(W);
         }
     }
+
+    if (ViewSummaryBtn)
+        ViewSummaryBtn->OnClicked.AddDynamic(this, &UGameplayWidget::OnViewSummaryClicked);
+
     
     // Initial state
     UpdateTurnContextVisibility();
@@ -150,18 +154,56 @@ void UGameplayWidget::RefreshBottom()
     APlayerController* OPC = GetOwningPlayer();
     if (!S || !OPC || !OPC->PlayerState) return;
 
+    const bool bEnd = (S->Phase == EMatchPhase::EndGame);
     const bool bMyTurn = (S->CurrentTurn == OPC->PlayerState);
     const bool bIsLastPhase = (S->TurnPhase == ETurnPhase::Shoot);
 
-    if (NextBtn)      NextBtn->SetIsEnabled(bMyTurn && S->Phase == EMatchPhase::Battle);
-    if (NextBtnLabel) NextBtnLabel->SetText(FText::FromString(bIsLastPhase ? TEXT("End Turn") : TEXT("Next Phase")));
+    const bool bShowViewSummary = (S->Phase == EMatchPhase::EndGame) || (S->CurrentRound >= S->MaxRounds && S->TurnInRound == 1);
+    if (ViewSummaryBtn) ViewSummaryBtn->SetVisibility(bShowViewSummary ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 
 
-    // (Context panel content comes later; for now we only wire the button)
+    if (NextBtn)
+    {
+        if (bEnd)
+        {
+            NextBtn->SetIsEnabled(true);
+            if (NextBtnLabel) NextBtnLabel->SetText(FText::FromString(TEXT("View Summary")));
+        }
+        else
+        {
+            NextBtn->SetIsEnabled(bMyTurn && S->Phase == EMatchPhase::Battle);
+            if (NextBtnLabel) NextBtnLabel->SetText(FText::FromString(bIsLastPhase ? TEXT("End Turn") : TEXT("Next Phase")));
+        }
+    }
+}
+
+void UGameplayWidget::OnViewSummaryClicked()
+{
+    if (AMatchPlayerController* PC = MPC())
+    {
+        PC->Client_ShowSummary(); // local show (GS is already populated when EndGame)
+    }
 }
 
 void UGameplayWidget::OnNextClicked()
 {
+    AMatchGameState* S = GS();
+    if (S && S->Phase == EMatchPhase::EndGame)
+    {
+        ShowSummary();
+        return;
+    }
+
     if (AMatchPlayerController* PC = MPC())
         PC->Server_EndPhase();
+}
+
+void UGameplayWidget::ShowSummary()
+{
+    if (!SummaryWidgetClass) return;
+    if (UUserWidget* W = CreateWidget<UUserWidget>(GetOwningPlayer(), SummaryWidgetClass))
+    {
+        W->AddToViewport();
+        SetVisibility(ESlateVisibility::Collapsed);
+    }
 }

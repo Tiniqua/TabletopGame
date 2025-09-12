@@ -420,12 +420,14 @@ void AUnitBase::RebuildFormation()
 
     if (ModelMeshes.Num() == 0) return;
 
-    FVector Ext(50, 50, 50);
-    if (UStaticMesh* SM = ModelMeshes[0]->GetStaticMesh())
-        Ext = SM->GetBounds().BoxExtent;
+    const int32 N = FMath::Max(1, ModelsCurrent);
 
-    const float radius = FMath::Max(Ext.X, Ext.Y) * ModelScale;
-    const float d      = (radius * 2.0f) + ModelPaddingCm;
+    // Use explicit per-unit spacing with optional extra spacing
+    float d = FMath::Max(5.f, ModelSpacingApartCm) + ExtraSpacingCmX; // uniform hex spacing
+
+    // Slight tighten for small squads (helps 5-mans feel closer)
+    if (N <= 5)      d *= 0.82f;
+    else if (N <=10) d *= 0.90f;
 
     auto AxialToXY = [d](int q, int r) -> FVector2D
     {

@@ -113,6 +113,8 @@ void AMatchGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutL
     DOREPLIFETIME(AMatchGameState, ScoreP2);
     DOREPLIFETIME(AMatchGameState, Preview);
     DOREPLIFETIME(AMatchGameState, ActionPreview);
+    DOREPLIFETIME(AMatchGameState, FinalSummary);
+    DOREPLIFETIME(AMatchGameState, bShowSummary);
 }
 
 void AMatchGameState::Multicast_ScreenMsg_Implementation(const FString& Text, FColor Color, float Time, int32 Key)
@@ -408,6 +410,18 @@ void AMatchGameMode::Handle_SelectTarget(AMatchPlayerController* PC, AUnitBase* 
 
             Attacker->FaceNearestEnemyInstant();
         }
+
+        static TWeakObjectPtr<AUnitBase> LastHighlightedTarget;
+        if (LastHighlightedTarget.IsValid() && LastHighlightedTarget != Target)
+        {
+            LastHighlightedTarget->OnDeselected();
+        }
+        if (Target)
+        {
+            Target->OnSelected();
+            LastHighlightedTarget = Target;
+        }
+        
         S->OnDeploymentChanged.Broadcast();
         S->ForceNetUpdate();
         return;
@@ -429,6 +443,17 @@ void AMatchGameMode::Handle_SelectTarget(AMatchPlayerController* PC, AUnitBase* 
     S->ActionPreview.Cover   = Cover;
 
     Attacker->FaceActorInstant(Target);
+
+    static TWeakObjectPtr<AUnitBase> LastHighlightedTarget;
+    if (LastHighlightedTarget.IsValid() && LastHighlightedTarget != Target)
+    {
+        LastHighlightedTarget->OnDeselected();
+    }
+    if (Target)
+    {
+        Target->OnSelected();
+        LastHighlightedTarget = Target;
+    }
 
     S->OnDeploymentChanged.Broadcast();
     S->ForceNetUpdate();
@@ -463,6 +488,35 @@ void AMatchGameMode::Handle_ConfirmShoot(AMatchPlayerController* PC, AUnitBase* 
     Ctx.WoundNeed = ToWoundTarget(Weapon.Strength, Target->GetToughness());
     Ctx.AP        = FMath::Max(0, Weapon.AP);
     Ctx.Damage    = FMath::Max(1, Weapon.Damage);
+
+    // ---- Movement-gated weapon rules ----
+    const bool bHasHeavy   = UWeaponKeywordHelpers::HasKeyword(Weapon, EWeaponKeyword::Heavy);
+    const bool bHasAssault = UWeaponKeywordHelpers::HasKeyword(Weapon, EWeaponKeyword::Assault);
+    const FWeaponKeywordData* RF = UWeaponKeywordHelpers::FindKeyword(Weapon, EWeaponKeyword::RapidFire);
+
+    // Assault: allow shooting after Advance; if not Assault and advanced, disallow shooting
+    if (Ctx.bAttackerAdvanced && !bHasAssault)
+    {
+        if (AMatchGameState* S2 = GS())
+            S2->Multicast_ScreenMsg(TEXT("Cannot shoot after Advancing (weapon is not Assault)."), FColor::Red, 3.f);
+        return; // block confirm
+    }
+
+    // Heavy: +1 to hit if did not move
+    if (bHasHeavy && !Ctx.bAttackerMoved)
+    {
+        Ctx.HitNeed = FMath::Clamp(Ctx.HitNeed - 1, 2, 6);
+    }
+
+    // Rapid Fire X: +X attacks per model at half-range or less
+    if (RF && RF->Value > 0)
+    {
+        const bool bHalfRange = (Ctx.RangeInches <= (float(Weapon.RangeInches) * 0.5f + KINDA_SMALL_NUMBER));
+        if (bHalfRange)
+        {
+            Ctx.Attacks += RF->Value * FMath::Max(0, Attacker->ModelsCurrent);
+        }
+    }
 
     // Cover baseline (keywords/mods can override some effects like Ignores Cover)
     int32 HitMod = 0, SaveMod = 0;
@@ -698,6 +752,17 @@ int32 AMatchGameMode::CountVisibleTargetModels(const AUnitBase* Attacker, const 
 
     int32 Visible = 0;
 
+    // NEW: Build a one-time ignore list of ALL units (AUnitBase subclasses)
+    TArray<const AActor*> IgnoreUnits;
+    IgnoreUnits.Reserve(128);
+    for (TActorIterator<AUnitBase> It(World); It; ++It)
+    {
+        if (const AUnitBase* U = *It)
+        {
+            IgnoreUnits.Add(U);
+        }
+    }
+
     for (int32 j = 0; j < Target->ModelMeshes.Num(); ++j)
     {
         UStaticMeshComponent* TC = Target->ModelMeshes[j];
@@ -718,10 +783,12 @@ int32 AMatchGameMode::CountVisibleTargetModels(const AUnitBase* Attacker, const 
         const FVector To   = ModelPoint;
 
         FHitResult Hit;
-        FCollisionQueryParams Params(SCENE_QUERY_STAT(UnitLOS), /*bTraceComplex*/ true);
-        Params.AddIgnoredActor(const_cast<AUnitBase*>(Attacker));
-        Params.AddIgnoredActor(const_cast<AUnitBase*>(Target));
 
+        // NEW: params that ignore ALL units (attacker/target included)
+        FCollisionQueryParams Params(SCENE_QUERY_STAT(UnitLOS), /*bTraceComplex*/ true);
+        Params.AddIgnoredActors(IgnoreUnits);
+
+        // Keep your existing LOS channel; just don’t let units block
         const bool bHit = World->LineTraceSingleByChannel(
             Hit, From, To, ECollisionChannel::ECC_GameTraceChannel3 /*LOS*/, Params);
 
@@ -732,6 +799,7 @@ int32 AMatchGameMode::CountVisibleTargetModels(const AUnitBase* Attacker, const 
     }
     return Visible;
 }
+
 
 static void DrawCoverTrace(UWorld* World,
                            const FVector& A, const FVector& B,
@@ -895,6 +963,11 @@ void AMatchGameMode::Handle_CancelPreview(AMatchPlayerController* PC, AUnitBase*
         S->Preview.Attacker = nullptr;
         S->Preview.Target   = nullptr;
         S->Preview.Phase    = S->TurnPhase;
+
+        if (S->Preview.Target)
+        {
+            if (AUnitBase* T = S->Preview.Target) T->OnDeselected();
+        }
 
         S->OnDeploymentChanged.Broadcast();
         S->ForceNetUpdate();
@@ -1201,7 +1274,6 @@ void AMatchGameMode::HandleEndPhase(APlayerController* PC)
         return;
     }
 
-    // round wrap
     S->CurrentRound = FMath::Clamp<uint8>(S->CurrentRound + 1, 1, S->MaxRounds);
     S->TurnInRound  = 0;
 
@@ -1209,19 +1281,18 @@ void AMatchGameMode::HandleEndPhase(APlayerController* PC)
     S->OnDeploymentChanged.Broadcast();
     S->ForceNetUpdate();
 
-    // Decay per-round modifiers on *all* units
+    // Per-round decays...
     for (TActorIterator<AUnitBase> It(GetWorld()); It; ++It)
-    {
         if (AUnitBase* U = *It) U->OnRoundAdvanced();
-    }
 
-    if (S->CurrentRound > S->MaxRounds)
+    // If we've finished the last round, end the game and show summary
+    if (S->CurrentRound >= S->MaxRounds)
     {
-        S->Phase = EMatchPhase::EndGame;
-        Broadcast();
+        BuildMatchSummaryAndReveal();
         return;
     }
 
+    // Otherwise continue normally
     S->CurrentTurn = OtherPlayer(S->CurrentTurn);
     S->TurnPhase   = ETurnPhase::Move;
     ResetUnitRoundStateFor(S->CurrentTurn);
@@ -1318,6 +1389,40 @@ void AMatchGameMode::ApplyDelayedDamageAndReport(AUnitBase* Attacker, AUnitBase*
     }
 
     S->Multicast_DrawShotDebug(DebugMid, DebugMsg, FColor::Black, 8.f);
+
+    S->OnDeploymentChanged.Broadcast();
+    S->ForceNetUpdate();
+}
+
+void AMatchGameMode::BuildMatchSummaryAndReveal()
+{
+    AMatchGameState* S = GS(); if (!S) return;
+
+    FMatchSummary Sum;
+    Sum.ScoreP1      = S->ScoreP1;
+    Sum.ScoreP2      = S->ScoreP2;
+    Sum.RoundsPlayed = S->CurrentRound;
+
+    // Collect all surviving units (both teams), with model counts
+    for (TActorIterator<AUnitBase> It(GetWorld()); It; ++It)
+    {
+        AUnitBase* U = *It;
+        if (!U || U->ModelsCurrent <= 0) continue;
+
+        FSurvivorEntry E;
+        E.UnitName      = U->UnitName;
+        E.ModelsCurrent = U->ModelsCurrent;
+        E.ModelsMax     = U->ModelsMax;
+
+        const ATabletopPlayerState* TPS = U->OwningPS ? Cast<ATabletopPlayerState>(U->OwningPS) : nullptr;
+        E.TeamNum = TPS ? TPS->TeamNum : 0;
+
+        Sum.Survivors.Add(E);
+    }
+
+    S->FinalSummary = Sum;
+    S->bShowSummary = true;
+    S->Phase        = EMatchPhase::EndGame;
 
     S->OnDeploymentChanged.Broadcast();
     S->ForceNetUpdate();

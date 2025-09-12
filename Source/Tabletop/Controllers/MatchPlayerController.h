@@ -27,6 +27,15 @@ public:
 	UPROPERTY()
 	bool bTargetMode = false;
 
+	UPROPERTY(EditDefaultsOnly, Category="UI")
+	TSubclassOf<class UMatchSummaryWidget> SummaryWidgetClass;
+
+	UPROPERTY() UMatchSummaryWidget* SummaryWidgetInstance = nullptr;
+
+	UFUNCTION(Client, Reliable) void Client_ShowSummary();
+	UFUNCTION(Client, Reliable) void Client_HideSummary();
+	UFUNCTION(Server, Reliable) void Server_ExitToMainMenu();
+
 	DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnSelectedChanged, AUnitBase*, NewSel);
 	UPROPERTY(BlueprintAssignable) FOnSelectedChanged OnSelectedChanged;
 
@@ -51,6 +60,7 @@ public:
 	void Client_KickUIRefresh();
 	
 	virtual void BeginPlay() override;
+	void SetSelectedUnit(AUnitBase* NewSel);
 	virtual void SetupInputComponent() override;
 
 	UFUNCTION(BlueprintCallable)

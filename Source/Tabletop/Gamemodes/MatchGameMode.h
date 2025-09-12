@@ -15,6 +15,25 @@ class ANetDebugTextActor;
 class AMatchPlayerController;
 class AUnitBase;
 
+USTRUCT(BlueprintType)
+struct FSurvivorEntry
+{
+	GENERATED_BODY()
+	UPROPERTY(BlueprintReadOnly) FText UnitName;
+	UPROPERTY(BlueprintReadOnly) int32 ModelsCurrent = 0;
+	UPROPERTY(BlueprintReadOnly) int32 ModelsMax     = 0;
+	UPROPERTY(BlueprintReadOnly) int32 TeamNum       = 0;
+};
+
+USTRUCT(BlueprintType)
+struct FMatchSummary
+{
+	GENERATED_BODY()
+	UPROPERTY(BlueprintReadOnly) int32 ScoreP1 = 0;
+	UPROPERTY(BlueprintReadOnly) int32 ScoreP2 = 0;
+	UPROPERTY(BlueprintReadOnly) TArray<FSurvivorEntry> Survivors;
+	UPROPERTY(BlueprintReadOnly) int32 RoundsPlayed = 0;
+};
 
 enum class EFaction : uint8;
 struct FUnitCount;
@@ -31,6 +50,15 @@ enum class ETurnPhase : uint8
 {
 	Move,
 	Shoot
+};
+
+USTRUCT(BlueprintType)
+struct FUnitSummary
+{
+	GENERATED_BODY()
+	UPROPERTY(BlueprintReadOnly) FName UnitId = NAME_None;
+	UPROPERTY(BlueprintReadOnly) FText DisplayName;
+	UPROPERTY(BlueprintReadOnly) int32 ModelsAlive = 0;
 };
 
 USTRUCT()
@@ -68,6 +96,22 @@ public:
 	UFUNCTION(NetMulticast, Reliable)
 	void Multicast_DrawShotDebug(const FVector& WorldLoc, const FString& Msg,
 								 FColor Color = FColor::Yellow, float Duration = 4.f);
+
+	UPROPERTY(ReplicatedUsing=OnRep_FinalSummary, BlueprintReadOnly, Category="Summary")
+	FMatchSummary FinalSummary;
+
+	UFUNCTION()
+	void OnRep_FinalSummary() { OnDeploymentChanged.Broadcast(); }
+
+	UPROPERTY(ReplicatedUsing=OnRep_Summary)
+	bool bShowSummary = false;
+
+	UFUNCTION() void OnRep_Summary() { OnDeploymentChanged.Broadcast(); }
+	
+	UFUNCTION(BlueprintPure, Category="Summary")
+	const FMatchSummary& GetFinalSummary() const { return FinalSummary; }
+	
+	void SetFinalSummary(const FMatchSummary& In) { FinalSummary = In; OnRep_FinalSummary(); ForceNetUpdate(); }
 
 	UPROPERTY(ReplicatedUsing=OnRep_Match)
 	FCombatPreview Preview;
@@ -171,7 +215,8 @@ public:
 	UFUNCTION()
 	void ApplyDelayedDamageAndReport(AUnitBase* Attacker, AUnitBase* Target, int32 TotalDamage, FVector DebugMid, FString DebugMsg);
 
-
+	void BuildMatchSummaryAndReveal();
+	
 	void FinalizePlayerJoin(APlayerController* PC);
 	void TallyObjectives_EndOfRound();
 
