@@ -7,6 +7,24 @@
 UENUM(BlueprintType)
 enum class ECombatEvent : uint8
 {
+    // Game/turn lifecycle
+    Game_Begin,              // once
+    Game_End,                // once
+    Round_Begin,
+    Round_End,
+    Turn_Begin,              // CurrentTurn set
+    Turn_End,                // before handover
+    Phase_Begin,             // TurnPhase set
+    Phase_End,
+
+    // Movement / generic action hooks
+    PreValidateMove,
+    PreMoveExecute,
+    PostMove,
+    PreAdvanceExecute,
+    PostAdvance,
+
+    // Existing shooting pipeline (unchanged order)
     PreValidateShoot,
     PreHitCalc,
     PostHitRolls,
@@ -15,7 +33,12 @@ enum class ECombatEvent : uint8
     PreSavingThrows,
     PostSavingThrows,
     PostDamageCompute,
-    PostResolveAttack
+    PostResolveAttack,
+
+    // Generic ability triggers
+    Ability_Activated,       // when a unit toggles/uses an ability or action
+    Ability_Expired,         // timed / uses burnt
+    Unit_Destroyed,
 };
 
 USTRUCT(BlueprintType)

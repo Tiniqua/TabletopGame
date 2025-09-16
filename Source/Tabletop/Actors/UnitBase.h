@@ -6,6 +6,7 @@
 #include "Tabletop/CombatEffects.h"   // FRollModifiers / ECombatEvent
 #include "UnitBase.generated.h"
 
+class UUnitAction;
 struct FUnitModifier;                 // from UnitModifiers.h
 class USphereComponent;
 class UStaticMeshComponent;
@@ -31,11 +32,37 @@ public:
     UFUNCTION(BlueprintCallable, BlueprintPure)
     void GetModelWorldLocations(TArray<FVector>& Out) const;
 
+    // ---------- Abilities ----------
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Action")
+    class UUnitActionResourceComponent* ActionPoints = nullptr;
+    
+    UPROPERTY(Instanced, VisibleAnywhere, BlueprintReadOnly, Category="Action")
+    TArray<UUnitAction*> RuntimeActions;
+
+    UPROPERTY(Instanced, VisibleAnywhere, BlueprintReadOnly, Category="Ability")
+    TArray< UUnitAbility*> RuntimeAbilities;
+
+    UPROPERTY(ReplicatedUsing=OnRep_AbilityClasses)
+    TArray<TSubclassOf<class UUnitAbility>> AbilityClassesRep;
+
+    UFUNCTION()
+    void OnRep_AbilityClasses();
+
+    // Helper you can call from both server + clients
+    void EnsureRuntimeBuilt();
+
+    // helpers
+    UFUNCTION(BlueprintCallable, Category="Action")
+    const TArray<UUnitAction*>& GetActions();
+    UFUNCTION(BlueprintCallable, Category="Ability")
+    const TArray<UUnitAbility*>& GetAbilities();
+
     // ---------- Identity / ownership (replicated) ----------
     UPROPERTY(Replicated) FName UnitId = NAME_None;
     UPROPERTY(Replicated) EFaction Faction = EFaction::None;
     UPROPERTY(Replicated) APlayerState* OwningPS = nullptr;
-
+    
     // Chosen weapon index within the row (server sets, clients read)
     UPROPERTY(Replicated) int32 WeaponIndex = 0;
 

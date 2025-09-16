@@ -6,6 +6,7 @@
 #include "Blueprint/UserWidget.h"
 #include "Tabletop/DeploymentWidget.h"
 #include "Tabletop/GameplayWidget.h"
+#include "Tabletop/Actors/UnitAction.h"
 
 #include "MatchPlayerController.generated.h"
 
@@ -36,6 +37,7 @@ public:
 	UFUNCTION(Client, Reliable) void Client_HideSummary();
 	UFUNCTION(Server, Reliable) void Server_ExitToMainMenu();
 
+	
 	DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnSelectedChanged, AUnitBase*, NewSel);
 	UPROPERTY(BlueprintAssignable) FOnSelectedChanged OnSelectedChanged;
 
@@ -114,7 +116,16 @@ public:
 	AMatchGameState* GS() const;
 
 	FTimerHandle BindGSTimer;
+	
+	UPROPERTY()
+	FName PendingGroundActionId = NAME_None;
 
+	UPROPERTY()
+	TObjectPtr<AUnitBase> PendingActionUnit = nullptr;
+	
+	UFUNCTION(Server, Reliable)
+	void Server_ExecuteAction(AUnitBase* Unit, FName ActionId, FActionRuntimeArgs Args);
+	
 	template<typename TWidget>
 	void ShowWidgetTyped(TWidget*& Instance, TSubclassOf<TWidget> Class, bool bShow)
 	{

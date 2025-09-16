@@ -11,6 +11,7 @@
 #include "Tabletop/LibraryHelpers.h"
 #include "Tabletop/MatchSummaryWidget.h"
 #include "Tabletop/TurnContextWidget.h"
+#include "Tabletop/Actors/UnitAction.h"
 #include "Tabletop/Actors/UnitBase.h"
 #include "Tabletop/Gamemodes/MatchGameMode.h"
 
@@ -45,6 +46,15 @@ void AMatchPlayerController::BeginPlay()
 	}
 
 	RefreshPhaseUI();
+}
+
+void AMatchPlayerController::Server_ExecuteAction_Implementation(AUnitBase* Unit, FName ActionId, FActionRuntimeArgs Args)
+{
+	if (AMatchGameMode* GM = GetWorld()->GetAuthGameMode<AMatchGameMode>())
+	{
+		Args.InstigatorPC = this; // stamp server-side for safety
+		GM->Handle_ExecuteAction(this, Unit, ActionId, Args);
+	}
 }
 
 void AMatchPlayerController::SetSelectedUnit(AUnitBase* NewSel)
@@ -106,6 +116,9 @@ void AMatchPlayerController::OnRightClickCancel()
     // Battle
     if (bTargetMode && SelectedUnit)
     {
+    	PendingGroundActionId = NAME_None;
+    	PendingActionUnit = nullptr;
+    	
         // Cancel preview on server and exit target mode
         Server_CancelPreview(SelectedUnit);
         bTargetMode = false;
@@ -118,100 +131,92 @@ void AMatchPlayerController::OnRightClickCancel()
 
 void AMatchPlayerController::OnLeftClick()
 {
-    AMatchGameState* S = GS();
+    AMatchGameState* S = GS(); 
     if (!S) return;
 
+    // ---------- Deployment unchanged ----------
     if (S->Phase == EMatchPhase::Deployment)
     {
-    	if (PendingDeployUnit == NAME_None) return;
+        if (PendingDeployUnit == NAME_None) return;
 
-    	FHitResult Hit;
-    	if (!TraceGround_Deploy(Hit)) return;
+        FHitResult Hit;
+        if (!TraceGround_Deploy(Hit)) return;
 
-    	const FRotator YawOnly(0.f, GetControlRotation().Yaw, 0.f);
-    	const FTransform Where(YawOnly, Hit.ImpactPoint);
+        const FRotator YawOnly(0.f, GetControlRotation().Yaw, 0.f);
+        const FTransform Where(YawOnly, Hit.ImpactPoint);
 
-    	Server_RequestDeploy(PendingDeployUnit, Where);
-    	PendingDeployUnit = NAME_None;
-    	StopDeployCursorFeedback();
-    	return;
-    }
-
-    // ---- Battle routing ----
-    const bool bMyTurn = (S->CurrentTurn == PlayerState);
-    if (!bMyTurn)
-    {
-        // Not your turn: ignore clicks (or allow inspecting enemies if you want)
+        Server_RequestDeploy(PendingDeployUnit, Where);
+        PendingDeployUnit = NAME_None;
+        StopDeployCursorFeedback();
         return;
     }
 
-    switch (S->TurnPhase)
+    // ---------- Phase-agnostic: try unit click first ----------
+    if (AUnitBase* Clicked = TraceUnit())
     {
-    case ETurnPhase::Move:
-    	{
-    		// If we already have a unit selected and it's ours…
-    		if (SelectedUnit && SelectedUnit->OwningPS == PlayerState)
-    		{
-    			// First: did we click another friendly unit? If so, reselect instead of moving.
-    			if (AUnitBase* ClickedUnit = TraceUnit())
-    			{
-    				const bool bFriendly = (ClickedUnit->OwningPS == PlayerState);
-    				if (bFriendly && ClickedUnit != SelectedUnit)
-    				{
-    					SelectUnit(ClickedUnit);  // swaps selection; no move issued
-    					return;
-    				}
-    			}
+        const bool bClickedFriendly = (Clicked->OwningPS == PlayerState);
+        const bool bHaveSelFriendly = (SelectedUnit && SelectedUnit->OwningPS == PlayerState);
 
-    			// Otherwise, treat as a ground click → attempt to move the selected unit
-    			FHitResult Hit;
-    			if (TraceGround_Battle(Hit))
-    			{
-    				Server_MoveUnit(SelectedUnit, Hit.ImpactPoint);
-    				return;
-    			}
-    			// If ground trace failed, fall through to selection attempt below
-    		}
-
-    		// No selected unit yet (or selected isn’t ours): try selecting a friendly unit under cursor
-    		if (AUnitBase* U = TraceUnit())
-    		{
-    			if (U->OwningPS == PlayerState)
-    			{
-    				SelectUnit(U);
-    				return;
-    			}
-    		}
-    		break;
-    	}
-
-    case ETurnPhase::Shoot:
-    {
-        // Entered target mode from UI? Then click enemy to set preview
-        if (bTargetMode && SelectedUnit && SelectedUnit->OwningPS == PlayerState)
+        // If we're in target mode (Shoot) and clicked an enemy, set preview
+        if (bTargetMode && bHaveSelFriendly && !bClickedFriendly && S->TurnPhase == ETurnPhase::Shoot)
         {
-            if (AUnitBase* Target = TraceUnit())
-            {
-                if (Target->OwningPS != PlayerState)
-                {
-                    Server_SelectTarget(SelectedUnit, Target);
-                    // remain in target mode until Confirm or cancel
-                }
-            }
+            Server_SelectTarget(SelectedUnit, Clicked);
             return;
         }
 
-        // Not in target mode: allow selecting one of your units
-        if (AUnitBase* U = TraceUnit())
+        // Otherwise, clicking a friendly just (re)selects it
+        if (bClickedFriendly)
         {
-            if (U->OwningPS == PlayerState)
-                SelectUnit(U);
+            SelectUnit(Clicked);
+            return;
         }
-        break;
+
+        // Clicked an enemy outside target mode -> ignore
     }
-    default: break;
+
+    // From here on, only your turn matters
+    const bool bMyTurn = (S->CurrentTurn == PlayerState);
+    if (!bMyTurn) return;
+
+    // ---------- Pending ground-required action? ----------
+    if (PendingGroundActionId != NAME_None && SelectedUnit && SelectedUnit->OwningPS == PlayerState)
+    {
+        FHitResult Hit;
+        if (TraceGround_Battle(Hit))
+        {
+            FActionRuntimeArgs Args;
+            Args.TargetLocation = Hit.ImpactPoint;
+            Server_ExecuteAction(SelectedUnit, PendingGroundActionId, Args);
+            PendingGroundActionId = NAME_None;
+            PendingActionUnit     = nullptr;
+        }
+        return;
     }
+
+    // ---------- Move phase ----------
+    if (S->TurnPhase == ETurnPhase::Move)
+    {
+        // Action-only movement (recommended): do nothing on ground click here.
+        // The user should click the "Move" action first to arm a ground click.
+        // --- If you want HYBRID (direct move), uncomment:
+        /*
+        if (SelectedUnit && SelectedUnit->OwningPS == PlayerState)
+        {
+            FHitResult Hit;
+            if (TraceGround_Battle(Hit))
+            {
+                Server_MoveUnit(SelectedUnit, Hit.ImpactPoint);
+                return;
+            }
+        }
+        */
+        return;
+    }
+
+    // ---------- Shoot phase (not in target mode) ----------
+    // Nothing else to do here; selecting friendlies was handled above.
 }
+
 
 void AMatchPlayerController::Client_ShowSummary_Implementation()
 {
@@ -301,15 +306,15 @@ void AMatchPlayerController::Client_OnAdvanced_Implementation(AUnitBase* Unit, i
 	// Update UI label nicely
 	if (UTurnContextWidget* W = /* however you obtain your HUD widget */ nullptr)
 	{
-		if (W->AdvanceLabel)
-		{
-			W->AdvanceLabel->SetText(FText::FromString(
-				FString::Printf(TEXT("+%d inches"), BonusInches)));
-		}
-		if (W->AdvanceBtn)
-		{
-			W->AdvanceBtn->SetIsEnabled(false);
-		}
+		// if (W->AdvanceLabel)
+		// {
+		// 	W->AdvanceLabel->SetText(FText::FromString(
+		// 		FString::Printf(TEXT("+%d inches"), BonusInches)));
+		// }
+		// if (W->AdvanceBtn)
+		// {
+		// 	W->AdvanceBtn->SetIsEnabled(false);
+		// }
 	}
 }
 

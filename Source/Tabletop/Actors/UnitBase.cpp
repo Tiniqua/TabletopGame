@@ -7,7 +7,10 @@
 #include "Components/StaticMeshComponent.h"
 #include "NiagaraFunctionLibrary.h"
 #include "NiagaraComponent.h"
+#include "UnitAbility.h"
+#include "UnitAction.h"
 #include "Kismet/GameplayStatics.h"
+#include "Tabletop/UnitActionResourceComponent.h"
 #include "Tabletop/PlayerStates/TabletopPlayerState.h"
 
 
@@ -25,12 +28,15 @@ AUnitBase::AUnitBase()
     SelectCollision->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
     SelectCollision->SetCollisionResponseToAllChannels(ECR_Ignore);
     SelectCollision->SetCollisionResponseToChannel(ECC_GameTraceChannel2, ECR_Block);
+
+    ActionPoints = CreateDefaultSubobject<UUnitActionResourceComponent>(TEXT("ActionPoints"));
+    ActionPoints->SetIsReplicated(true);
 }
 
 void AUnitBase::BeginPlay()
 {
     Super::BeginPlay();
-
+    EnsureRuntimeBuilt();
     if (HasAuthority())
     {
         RebuildFormation();
@@ -78,6 +84,35 @@ void AUnitBase::Server_InitFromRow(APlayerState* OwnerPS, const FUnitRow& Row, i
         CurrentWeapon = FWeaponProfile{};                // defaults (Range=24 etc. if you set)
     }
 
+    RuntimeActions.Empty();
+    RuntimeActions.Add(NewObject<UAction_Move>(this));
+    RuntimeActions.Add(NewObject<UAction_Advance>(this));
+    RuntimeActions.Add(NewObject<UAction_Shoot>(this));
+    
+    for (UUnitAction* A : RuntimeActions) if (A) A->Setup(this);
+
+    // Create abilities from DT
+    RuntimeAbilities.Empty();
+    for (TSubclassOf<UUnitAbility> AC : Row.AbilityClasses)
+    if (AC)
+    {
+        if (UUnitAbility* Ab = NewObject<UUnitAbility>(this, AC))
+        {
+            RuntimeAbilities.Add(Ab);
+            Ab->Setup(this);
+            if (Ab->GetClass()->FindPropertyByName(TEXT("GrantsAction")))
+            {
+                if (UUnitAction* GA = Ab->GrantsAction ? NewObject<UUnitAction>(this, Ab->GrantsAction) : nullptr)
+                {
+                    GA->Setup(this);
+                    RuntimeActions.Add(GA);
+                }
+            }
+        }
+    }
+    AbilityClassesRep = Row.AbilityClasses;
+    EnsureRuntimeBuilt();
+    
     // Snapshots for UI/fast access stay in sync with CurrentWeapon
     SyncWeaponSnapshotsFromCurrent();
 
@@ -86,6 +121,49 @@ void AUnitBase::Server_InitFromRow(APlayerState* OwnerPS, const FUnitRow& Row, i
 
     RebuildFormation();
     ForceNetUpdate();
+}
+
+void AUnitBase::OnRep_AbilityClasses()
+{
+    EnsureRuntimeBuilt();
+}
+
+void AUnitBase::EnsureRuntimeBuilt()
+{
+    // Actions: if empty, add the three base ones
+    if (RuntimeActions.Num() == 0)
+    {
+        RuntimeActions.Add(NewObject<UAction_Move>(this));
+        RuntimeActions.Add(NewObject<UAction_Advance>(this));
+        RuntimeActions.Add(NewObject<UAction_Shoot>(this));
+        for (UUnitAction* A : RuntimeActions) if (A) A->Setup(this);
+    }
+
+    // Abilities: (re)create from replicated classes
+    // (If you later add per-match upgrades etc., add guards as needed)
+    if (RuntimeAbilities.Num() == 0 && AbilityClassesRep.Num() > 0)
+    {
+        for (TSubclassOf<UUnitAbility> AC : AbilityClassesRep)
+        {
+            if (!*AC) continue;
+            if (UUnitAbility* Ab = NewObject<UUnitAbility>(this, AC))
+            {
+                RuntimeAbilities.Add(Ab);
+                Ab->Setup(this);
+
+                // auto-grant an action if the ability exposes one
+                if (Ab->GetClass()->FindPropertyByName(TEXT("GrantsAction")))
+                {
+                    // Access the property safely
+                    if (UUnitAction* GA = Ab->GrantsAction ? NewObject<UUnitAction>(this, Ab->GrantsAction) : nullptr)
+                    {
+                        GA->Setup(this);
+                        RuntimeActions.Add(GA);
+                    }
+                }
+            }
+        }
+    }
 }
 
 void AUnitBase::SyncWeaponSnapshotsFromCurrent()
@@ -103,6 +181,7 @@ void AUnitBase::OnRep_CurrentWeapon()
 {
     // Keep cached ints consistent on clients
     SyncWeaponSnapshotsFromCurrent();
+    EnsureRuntimeBuilt();
 }
 
 FTransform AUnitBase::GetMuzzleTransform(int32 ModelIndex) const
@@ -215,6 +294,21 @@ void AUnitBase::GetModelWorldLocations(TArray<FVector>& Out) const
         if (IsValid(C)) Out.Add(C->GetComponentLocation());
 
     if (Out.Num() == 0) Out.Add(GetActorLocation());
+}
+
+const TArray<UUnitAction*>& AUnitBase::GetActions()
+{
+    if (RuntimeActions.Num() == 0)
+    {
+        EnsureRuntimeBuilt();   // builds Move/Advance/Shoot and any granted by abilities
+    }
+    
+    return RuntimeActions;
+}
+
+const TArray<UUnitAbility*>& AUnitBase::GetAbilities()
+{
+    return RuntimeAbilities;
 }
 
 int32 AUnitBase::GetObjectiveControlAt(const AObjectiveMarker* Marker) const
@@ -393,11 +487,13 @@ void AUnitBase::OnDeselected()
 void AUnitBase::OnRep_Models()
 {
     RebuildFormation();
+    EnsureRuntimeBuilt();
 }
 
 void AUnitBase::OnRep_Move()
 {
     // Hook for UI if needed
+    EnsureRuntimeBuilt();
 }
 
 void AUnitBase::RebuildFormation()
@@ -616,4 +712,5 @@ void AUnitBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetim
     DOREPLIFETIME(AUnitBase, InvulnerableSaveRep);
     DOREPLIFETIME(AUnitBase, FeelNoPainRep);
 
+    DOREPLIFETIME(AUnitBase, AbilityClassesRep);
 }

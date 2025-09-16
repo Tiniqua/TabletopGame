@@ -6,8 +6,12 @@
 #include "GameFramework/GameModeBase.h"
 #include "GameFramework/GameStateBase.h"
 #include "Net/UnrealNetwork.h"
+#include "Tabletop/UnitActionResourceComponent.h"
 #include "Tabletop/Actors/CoverVolume.h"
+#include "Tabletop/Actors/UnitAction.h"
+
 #include "MatchGameMode.generated.h"
+
 
 class ATabletopPlayerState;
 class ANetDebugTextActor;
@@ -43,13 +47,6 @@ enum class EMatchPhase : uint8
 	Deployment,
 	Battle,
 	EndGame
-};
-
-UENUM(BlueprintType)
-enum class ETurnPhase : uint8
-{
-	Move,
-	Shoot
 };
 
 USTRUCT(BlueprintType)
@@ -242,6 +239,7 @@ public:
 	
 	void FinalizePlayerJoin(APlayerController* PC);
 	void TallyObjectives_EndOfRound();
+	void ResetAPForTurnOwner(UWorld* W, APlayerState* TurnOwner, EActionPoolScope Scope);
 
 	void ResolveMoveToBudget(const AUnitBase* U, const FVector& WantedDest, FVector& OutFinalDest, float& OutSpentTTIn,
 	                         bool& bOutClamped) const;
@@ -254,6 +252,8 @@ public:
 	void Handle_SelectTarget(AMatchPlayerController* PC, AUnitBase* Attacker, AUnitBase* Target);
 	void Handle_ConfirmShoot(AMatchPlayerController* PC, AUnitBase* Attacker, AUnitBase* Target);
 	int32 CountVisibleTargetModels(const AUnitBase* Attacker, const AUnitBase* Target) const;
+	
+	void Handle_ExecuteAction(class AMatchPlayerController* PC, class AUnitBase* Unit, FName ActionId, const FActionRuntimeArgs& Args);
 
 	// Cancels any active GS->Preview if this PC owns the Attacker and it's their turn
 	void Handle_CancelPreview(class AMatchPlayerController* PC, class AUnitBase* Attacker);
@@ -284,8 +284,6 @@ public:
 	// Full query with per-model fallback; returns modifiers
 	bool QueryCover(class AUnitBase* Attacker, class AUnitBase* Target,
 					int32& OutHitMod, int32& OutSaveMod, ECoverType& OutType) const;
-
-	
 
 
 protected:

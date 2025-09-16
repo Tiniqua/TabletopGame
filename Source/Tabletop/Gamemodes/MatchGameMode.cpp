@@ -18,11 +18,14 @@
 #include "Tabletop/PlayerStates/TabletopPlayerState.h"
 
 // Data-driven combat system additions
+#include "Tabletop/AbiltyEventSubsystem.h"
 #include "Tabletop/ArmyData.h"                  // Faction -> Units DT lookup
 #include "Tabletop/WeaponKeywords.h"
 #include "Tabletop/CombatEffects.h"
 #include "Tabletop/KeywordProcessor.h"
+#include "Tabletop/UnitActionResourceComponent.h"
 #include "Tabletop/WeaponKeywordHelpers.h"
+#include "Tabletop/Actors/UnitAction.h"
 
 namespace
 {
@@ -55,6 +58,14 @@ namespace
         Need = FMath::Clamp(Need, 2, 7);
         return Need;
     }
+}
+
+static UAbilityEventSubsystem* AbilityBus(UWorld* W)
+{
+    if (!W) return nullptr;
+    if (UGameInstance* GI = W->GetGameInstance())
+        return GI->GetSubsystem<UAbilityEventSubsystem>();
+    return nullptr;
 }
 
 static APlayerState* ResolveControllerPS(const AMatchGameState* S, const APlayerController* PC)
@@ -473,8 +484,6 @@ void AMatchGameMode::Handle_SelectTarget(AMatchPlayerController* PC, AUnitBase* 
     AMatchGameState* S = GS();
     if (!S || S->Phase != EMatchPhase::Battle || S->TurnPhase != ETurnPhase::Shoot) return;
     
-    
-
     if (PC->PlayerState != S->CurrentTurn) return;
     if (Attacker->OwningPS != PC->PlayerState) return;
 
@@ -516,8 +525,6 @@ void AMatchGameMode::Handle_SelectTarget(AMatchPlayerController* PC, AUnitBase* 
     S->ActionPreview.HitMod  = static_cast<int8>(HitMod);
     S->ActionPreview.SaveMod = static_cast<int8>(SaveMod);
     S->ActionPreview.Cover   = Cover;
-
-    Attacker->FaceActorInstant(Target);
 
     Attacker->FaceActorInstant(Target);
 
@@ -1304,19 +1311,24 @@ void AMatchGameMode::HandleStartBattle(APlayerController* PC)
     if (!HasAuthority() || !PC) return;
     if (AMatchGameState* S = GS())
     {
-        if (PC->PlayerState != S->P1) return; // host-only
+        if (PC->PlayerState != S->P1) return;
         if (!S->bDeploymentComplete)  return;
 
-        S->Phase = EMatchPhase::Battle;
+        S->Phase      = EMatchPhase::Battle;
         S->CurrentRound= 1;
         S->MaxRounds   = 5;
         S->TurnInRound = 0;
         S->TurnPhase   = ETurnPhase::Move;
 
+        // ✅ Set the turn owner first
         S->CurrentTurn = S->CurrentDeployer;
-        if (AMatchGameMode* GM = GetWorld()->GetAuthGameMode<AMatchGameMode>())
-            GM->ResetUnitRoundStateFor(S->CurrentTurn);
-        
+
+        // Reset unit move/shot flags etc. for the new turn owner
+        ResetUnitRoundStateFor(S->CurrentTurn);
+
+        // ✅ Now give AP for the phase owner
+        ResetAPForTurnOwner(GetWorld(), S->CurrentTurn, EActionPoolScope::PerPhase);
+
         S->OnDeploymentChanged.Broadcast();
         S->ForceNetUpdate();
 
@@ -1325,6 +1337,7 @@ void AMatchGameMode::HandleStartBattle(APlayerController* PC)
                 MPC->Client_KickPhaseRefresh();
     }
 }
+
 
 void AMatchGameMode::HandleEndPhase(APlayerController* PC)
 {
@@ -1342,6 +1355,7 @@ void AMatchGameMode::HandleEndPhase(APlayerController* PC)
     if (S->TurnPhase == ETurnPhase::Move)
     {
         S->TurnPhase = ETurnPhase::Shoot;
+        ResetAPForTurnOwner(GetWorld(), S->CurrentTurn, EActionPoolScope::PerPhase);
         Broadcast();
         return;
     }
@@ -1351,10 +1365,14 @@ void AMatchGameMode::HandleEndPhase(APlayerController* PC)
         S->TurnInRound = 1;
         S->CurrentTurn = OtherPlayer(S->CurrentTurn);
         S->TurnPhase   = ETurnPhase::Move;
+
         ResetUnitRoundStateFor(S->CurrentTurn);
+        ResetAPForTurnOwner(GetWorld(), S->CurrentTurn, EActionPoolScope::PerPhase);
+
         Broadcast();
         return;
     }
+
 
     S->CurrentRound = FMath::Clamp<uint8>(S->CurrentRound + 1, 1, S->MaxRounds);
     S->TurnInRound  = 0;
@@ -1598,4 +1616,58 @@ void AMatchGameMode::TallyObjectives_EndOfRound()
     GS->ScoreP2 += RoundP2;
 
     GS->OnDeploymentChanged.Broadcast();
+}
+
+void AMatchGameMode::ResetAPForTurnOwner(UWorld* W, APlayerState* TurnOwner, EActionPoolScope Scope)
+{
+    if (!W || !TurnOwner) return;
+    for (TActorIterator<AUnitBase> It(W); It; ++It)
+    {
+        AUnitBase* U = *It; if (!U || U->OwningPS != TurnOwner) continue;
+        if (auto* AP = U->FindComponentByClass<UUnitActionResourceComponent>())
+        {
+            if (Scope == EActionPoolScope::PerTurn) AP->ResetForTurn();
+            else AP->ResetForPhase(); // if you keep per-phase by default
+            U->ForceNetUpdate();
+        }
+    }
+}
+
+void AMatchGameMode::Handle_ExecuteAction(AMatchPlayerController* PC, AUnitBase* Unit, FName ActionId, const FActionRuntimeArgs& Args)
+{
+    if (!HasAuthority() || !PC || !Unit) return;
+
+    AMatchGameState* S = GS();
+    if (!S || S->Phase != EMatchPhase::Battle) return;
+
+    // Turn ownership
+    if (PC->PlayerState != S->CurrentTurn) return;
+    if (Unit->OwningPS != PC->PlayerState) return;
+
+    // Find the action
+    UUnitAction* Action = nullptr;
+    for (UUnitAction* A : Unit->GetActions())
+        if (A && A->Desc.ActionId == ActionId) { Action = A; break; }
+    if (!Action) return;
+
+    // Phase gate + AP inside CanExecute
+    if (!Action->CanExecute(Unit, Args)) return;
+
+    // Broadcast before
+    if (UAbilityEventSubsystem* Bus = AbilityBus(GetWorld()))
+    {
+        FAbilityEventContext Ctx;
+        Ctx.Event   = ECombatEvent::Ability_Activated;
+        Ctx.GM      = this;
+        Ctx.GS      = S;
+        Ctx.Source  = Unit;
+        Ctx.Target  = Args.TargetUnit;
+        Ctx.WorldPos= Args.TargetLocation;
+        Bus->Broadcast(Ctx);
+    }
+
+    // Execute (action pays AP internally)
+    Action->Execute(Unit, Args);
+
+    // You can optionally broadcast a "Post" event if needed
 }
