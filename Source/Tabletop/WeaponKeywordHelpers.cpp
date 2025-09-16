@@ -105,7 +105,7 @@ FText UWeaponKeywordHelpers::GetKeywordTooltip(EWeaponKeyword K, const FWeaponKe
         return Txt(TEXT("Blast: Bonus attacks vs larger units (not evaluated here)."));
 
     case EWeaponKeyword::Hazardous:
-        return Txt(TEXT("Hazardous: Risk to bearer after firing."));
+        return Txt(TEXT("Hazardous: After firing, roll one D6 per model; each 6 destroys that model."));
 
     case EWeaponKeyword::Torrent:
         return Txt(TEXT("Torrent: Attacks auto-hit."));

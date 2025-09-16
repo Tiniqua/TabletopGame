@@ -59,6 +59,9 @@ void AUnitBase::Server_InitFromRow(APlayerState* OwnerPS, const FUnitRow& Row, i
     WoundsRep    = Row.Wounds;
     SaveRep      = Row.Save;
 
+    InvulnerableSaveRep = FMath::Clamp(Row.InvulnSave, 2, 7);
+    FeelNoPainRep       = FMath::Clamp(Row.FeelNoPain, 2, 7);
+
     WoundsPool = ModelsMax * FMath::Max(1, WoundsRep);
 
     MoveMaxInches    = static_cast<float>(Row.MoveInches);
@@ -610,5 +613,7 @@ void AUnitBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetim
     DOREPLIFETIME(AUnitBase, bAdvancedThisTurn);
 
     DOREPLIFETIME(AUnitBase, CurrentWeapon);
+    DOREPLIFETIME(AUnitBase, InvulnerableSaveRep);
+    DOREPLIFETIME(AUnitBase, FeelNoPainRep);
 
 }

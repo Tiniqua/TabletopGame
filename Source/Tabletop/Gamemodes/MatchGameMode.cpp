@@ -80,6 +80,19 @@ static APlayerState* ResolveControllerPS(const AMatchGameState* S, const APlayer
     return nullptr;
 }
 
+int32 AMatchGameMode::ApplyFeelNoPain(int32 IncomingDamage, int32 Fnp)
+{
+    if (IncomingDamage <= 0) return 0;
+    if (Fnp < 2 || Fnp > 6) return IncomingDamage; // 7 = none
+
+    int32 prevented = 0;
+    for (int32 i = 0; i < IncomingDamage; ++i)
+    {
+        if (D6() >= Fnp) ++prevented;
+    }
+    return FMath::Max(0, IncomingDamage - prevented);
+}
+
 ATabletopPlayerState* AMatchGameState::GetPSForTeam(int32 TeamNum) const
 {
     if (P1 && P1->TeamNum == TeamNum) return P1;
@@ -693,12 +706,18 @@ void AMatchGameMode::Handle_ConfirmShoot(AMatchPlayerController* PC, AUnitBase* 
     }
 
     const int32 SaveBase = Target->GetSave();
-    int32 SaveNeed = ModifiedSaveNeed(SaveBase, Ctx.AP);
 
-    // If ignoring cover, drop the cover save bonus (leave hit mod intact)
+    // 1) Apply AP to armour
+    int32 ArmourNeed = ModifiedSaveNeed(SaveBase, Ctx.AP);
+
+    // 2) Apply cover to *armour* only (invulns do not benefit from cover)
     if (bIgnoreCover) { SaveMod = 0; }
+    ArmourNeed = FMath::Clamp(ArmourNeed - SaveMod, 2, 7);
 
-    SaveNeed = FMath::Clamp(SaveNeed - SaveMod, 2, 7);
+    // 3) Cap by invulnerable (2..6). 7 (or >6) means “no invuln”.
+    const int32 InvTN = Target->GetInvuln();
+    int32 SaveNeed = (InvTN >= 2 && InvTN <= 6) ? FMath::Min(ArmourNeed, InvTN) : ArmourNeed;
+
     const bool bHasSave = (SaveNeed <= 6);
 
     // Split normal vs no-save crit wounds
@@ -734,6 +753,9 @@ void AMatchGameMode::Handle_ConfirmShoot(AMatchPlayerController* PC, AUnitBase* 
     const int32 MaxDamageByLOS  = VisibleModels * WoundsPerModel;
     const int32 ClampedDamage   = FMath::Min(totalDamage, MaxDamageByLOS);
 
+    const int32 FnpTN = Target->GetFeelNoPain(); // 2..6; 7 means none
+    const int32 FinalDamage = ApplyFeelNoPain(ClampedDamage, FnpTN);
+
     // World-space debug location
     const FVector L0  = Attacker->GetActorLocation();
     const FVector L1  = Target->GetActorLocation();
@@ -742,22 +764,28 @@ void AMatchGameMode::Handle_ConfirmShoot(AMatchPlayerController* PC, AUnitBase* 
     const TCHAR* CoverTxt = CoverTypeToText(Cover);
     const int32 savesMade = bHasSave ? (NormalWounds - (Unsaved - Ctx.CritWounds_NoSave)) : 0;
 
+    FString fnpNote;
+    if (FnpTN >= 2 && FnpTN <= 6)
+    {
+        fnpNote = FString::Printf(TEXT("\nFNP %d++ applied: %d -> %d"), FnpTN, ClampedDamage, FinalDamage);
+    }
+
     const FString Msg = FString::Printf(
-        TEXT("Hit: %d/%d\nWound: %d/%d\nSave: %d/%d (%s%s)\nLOS: %d/%d models visible (cap %d dmg)\nDamage rolled: %d -> applied: %d on impact"),
+    TEXT("Hit: %d/%d\nWound: %d/%d\nSave: %d/%d (%s%s)\nLOS: %d/%d models visible (cap %d dmg)\nDamage rolled: %d -> clamped: %d%s\nApplied on impact: %d"),
         Ctx.Hits, Ctx.Attacks,
         Ctx.Wounds, Ctx.Hits,
         savesMade, NormalWounds, CoverTxt, bIgnoreCover?TEXT(", ignores cover"):TEXT(""),
         VisibleModels, TargetModels, MaxDamageByLOS,
-        totalDamage, ClampedDamage);
+        totalDamage, ClampedDamage, *fnpNote,
+        FinalDamage);
 
     const float ImpactDelay = Attacker->ImpactDelaySeconds;
-
     Attacker->Multicast_PlayMuzzleAndImpactFX_AllModels(Target, ImpactDelay);
 
-    // Schedule damage and debug at impact time
+    // Schedule *final* damage (after FNP)
     FTimerDelegate Del;
     Del.BindUFunction(this, FName("ApplyDelayedDamageAndReport"),
-                      Attacker, Target, ClampedDamage, Mid, Msg);
+                      Attacker, Target, FinalDamage, Mid, Msg);
 
     FTimerHandle Tmp;
     GetWorld()->GetTimerManager().SetTimer(Tmp, Del, FMath::Max(0.f, ImpactDelay), false);

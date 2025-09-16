@@ -80,6 +80,12 @@ struct FUnitRow : public FTableRowBase
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32   Save = 3;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32   ObjectiveControlPerModel = 1;
 
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Defense")
+    int32 InvulnSave = 7;   // 2..6 valid, 7 = no invuln
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Defense")
+    int32 FeelNoPain = 7;   // 2..6 valid, 7 = no FNP
+
     // Squad sizing
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 Models = 5;   // NEW
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 DefaultWeaponIndex = 0; // NEW

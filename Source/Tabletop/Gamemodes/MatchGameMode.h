@@ -138,7 +138,7 @@ public:
 	UPROPERTY(ReplicatedUsing=OnRep_Match)
 	FCombatPreview Preview;
 	UFUNCTION() void OnRep_Match(){ OnDeploymentChanged.Broadcast(); }
-
+	
 	UFUNCTION(BlueprintPure, Category="Teams")
 	ATabletopPlayerState* GetPSForTeam(int32 TeamNum) const;
 	
@@ -219,6 +219,7 @@ class TABLETOP_API AMatchGameMode : public AGameModeBase
 {
 	GENERATED_BODY()
 public:
+	int32 ApplyFeelNoPain(int32 IncomingDamage, int32 FnpTN);
 	AMatchGameMode();
 	virtual void HandleSeamlessTravelPlayer(AController*& C) override;
 

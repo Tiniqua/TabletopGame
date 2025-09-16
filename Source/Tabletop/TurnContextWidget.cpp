@@ -18,6 +18,25 @@ struct FEffectiveUnitFlags
     float MoveBudgetEffective   = 0.f;
 };
 
+static int32 TryGetIntProp(const AUnitBase* U, const TCHAR* PropName, int32 DefaultIfMissing = 7)
+{
+    if (!U) return DefaultIfMissing;
+    if (const FProperty* P = U->GetClass()->FindPropertyByName(FName(PropName)))
+        if (const FIntProperty* IP = CastField<FIntProperty>(P))
+            return IP->GetPropertyValue_InContainer(U);
+    return DefaultIfMissing;
+}
+
+static int32 GetInvuln_Client(const AUnitBase* U)
+{
+    return TryGetIntProp(U, TEXT("InvulnerableSaveRep"), 7);
+}
+
+static int32 GetFeelNoPain_Client(const AUnitBase* U)
+{
+    return TryGetIntProp(U, TEXT("FeelNoPainRep"),       7);
+}
+
 static FEffectiveUnitFlags BuildEffective(const AUnitBase* Sel)
 {
     FEffectiveUnitFlags E{};
@@ -63,45 +82,89 @@ void UTurnContextWidget::UpdateCombatEstimates(AUnitBase* Attacker, AUnitBase* T
     const int32 atkPM     = FMath::Max(0, Attacker->GetAttacks());
     const int32 totalAtk  = models * atkPM;
 
-    const int32 dmg       = FMath::Max(1, Attacker->GetDamage());            // or WeaponDamageRep
-    const int32 sVal      = Attacker->WeaponStrengthRep;                         // or WeaponStrengthRep
+    const int32 dmg       = FMath::Max(1, Attacker->GetDamage());
+    const int32 sVal      = Attacker->WeaponStrengthRep;
     const int32 tVal      = Target->GetToughness();
-    const int32 ap        = FMath::Max(0, Attacker->WeaponAPRep);                // or WeaponAPRep
-    const int32 baseToHit = FMath::Clamp(Attacker->WeaponSkillToHitRep, 2, 6);        // or WeaponSkillToHitRep
+    const int32 ap        = FMath::Max(0, Attacker->WeaponAPRep);
+    const int32 baseToHit = FMath::Clamp(Attacker->WeaponSkillToHitRep, 2, 6);
     const int32 baseSave  = Target->GetSave();
 
-    // Same sign convention as your server code:
-    // High cover sets HitMod=-1 → need increases by +1 (i.e., +(-HitMod))
-    const int32 hitNeed  = FMath::Clamp(baseToHit + (HitMod * -1), 2, 6);
-    const int32 woundNeed= CombatMath::ToWoundTarget(sVal, tVal);
-    int32 saveNeed       = CombatMath::ModifiedSaveNeed(baseSave, ap);
-    saveNeed             = FMath::Clamp(saveNeed - SaveMod, 2, 7);
+    // Cover/hit math matches server’s sign convention
+    const int32 hitNeed   = FMath::Clamp(baseToHit + (HitMod * -1), 2, 6);
+    const int32 woundNeed = CombatMath::ToWoundTarget(sVal, tVal);
 
+    // Start from AP-modified save and cover bonus
+    int32 saveNeed = CombatMath::ModifiedSaveNeed(baseSave, ap);
+    saveNeed       = FMath::Clamp(saveNeed - SaveMod, 2, 7);
+
+    // ---- NEW: cap by invulnerable (if any) ----
+    const int32 invTN = GetInvuln_Client(Target); // 2..6, 7 means none
+    if (invTN >= 2 && invTN <= 6)
+        saveNeed = FMath::Min(saveNeed, invTN);
+
+    // Core probabilities
     const float pHit   = CombatMath::ProbAtLeast(hitNeed);
     const float pWound = CombatMath::ProbAtLeast(woundNeed);
     const float pSave  = (saveNeed <= 6) ? CombatMath::ProbAtLeast(saveNeed) : 0.f;
     const float pFail  = 1.f - pSave;
 
     const float pUnsavedPerAtk = pHit * pWound * pFail;
-    const float evDamage       = float(totalAtk) * pUnsavedPerAtk * float(dmg);
+    float evDamage             = float(totalAtk) * pUnsavedPerAtk * float(dmg);
 
+    // ---- NEW: Feel No Pain expected reduction ----
+    const int32 fnpTN = GetFeelNoPain_Client(Target); // 2..6, 7 means none
+    if (fnpTN >= 2 && fnpTN <= 6)
+    {
+        const float pFNP = CombatMath::ProbAtLeast(fnpTN); // chance each damage point is negated
+        evDamage *= (1.f - pFNP);
+    }
+
+    // --- UI ---
     if (HitChanceText)
         HitChanceText->SetText(FText::FromString(
             FString::Printf(TEXT("Hit: %d%% (need %d+)"), FMath::RoundToInt(pHit*100.f), hitNeed)));
+
     if (WoundChanceText)
         WoundChanceText->SetText(FText::FromString(
             FString::Printf(TEXT("Wound: %d%% (need %d+)"), FMath::RoundToInt(pWound*100.f), woundNeed)));
+
     if (SaveFailText)
     {
         if (saveNeed <= 6)
-            SaveFailText->SetText(FText::FromString(
-                FString::Printf(TEXT("Fail Save: %d%% (save %d+)"), FMath::RoundToInt(pFail*100.f), saveNeed)));
+        {
+            // Annotate when Invulnerable is capping
+            if (invTN >= 2 && invTN <= 6 && saveNeed == invTN)
+            {
+                SaveFailText->SetText(FText::FromString(
+                    FString::Printf(TEXT("Fail Save: %d%% (save %d+, inv %d+)"),
+                                    FMath::RoundToInt(pFail*100.f), saveNeed, invTN)));
+            }
+            else
+            {
+                SaveFailText->SetText(FText::FromString(
+                    FString::Printf(TEXT("Fail Save: %d%% (save %d+)"),
+                                    FMath::RoundToInt(pFail*100.f), saveNeed)));
+            }
+        }
         else
+        {
             SaveFailText->SetText(FText::FromString(TEXT("Fail Save: 100% (no save)")));
+        }
     }
+
     if (EstDamageText)
-        EstDamageText->SetText(FText::FromString(
-            FString::Printf(TEXT("Est. Dmg: %.1f"), evDamage)));
+    {
+        if (fnpTN >= 2 && fnpTN <= 6)
+        {
+            EstDamageText->SetText(FText::FromString(
+                FString::Printf(TEXT("Est. Dmg: %.1f (FNP %d++)"), evDamage, fnpTN)));
+        }
+        else
+        {
+            EstDamageText->SetText(FText::FromString(
+                FString::Printf(TEXT("Est. Dmg: %.1f"), evDamage)));
+        }
+    }
 
     if (CoverStatusText)
         CoverStatusText->SetText(FText::FromString(CombatMath::CoverTypeToText(CoverType)));
@@ -398,7 +461,18 @@ void UTurnContextWidget::FillTarget(AUnitBase* U)
     if (TargetNameText)    TargetNameText->SetText(U->UnitName);
     if (TargetMembersText) TargetMembersText->SetText(FText::FromString(FString::Printf(TEXT("%d / %d models"), U->ModelsCurrent, U->ModelsMax)));
     if (TargetToughText)   TargetToughText->SetText(FText::FromString(FString::Printf(TEXT("T: %d"), U->GetToughness())));
-    if (TargetWoundsText)  TargetWoundsText->SetText(FText::FromString(FString::Printf(TEXT("W: %d"), U->GetWounds())));
+    
+    // Append invuln/FNP summary to wounds line
+    const int32 invTN = GetInvuln_Client(U);
+    const int32 fnpTN = GetFeelNoPain_Client(U);
+
+    FString extras;
+    if (invTN >= 2 && invTN <= 6) extras += FString::Printf(TEXT("  | Inv %d+"), invTN);
+    if (fnpTN >= 2 && fnpTN <= 6) extras += FString::Printf(TEXT("  | FNP %d++"), fnpTN);
+
+    if (TargetWoundsText)
+        TargetWoundsText->SetText(FText::FromString(
+            FString::Printf(TEXT("W: %d%s"), U->GetWounds(), *extras)));
 }
 
 void UTurnContextWidget::ClearTargetFields()

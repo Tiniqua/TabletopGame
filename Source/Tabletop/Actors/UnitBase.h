@@ -81,6 +81,15 @@ public:
     UPROPERTY(Replicated) int32 WeaponSkillToHitRep  = 4;
     UPROPERTY(Replicated) int32 WeaponStrengthRep    = 4;
     UPROPERTY(Replicated) int32 WeaponAPRep          = 0;
+    
+    UPROPERTY(Replicated, BlueprintReadOnly, Category="Stats|Defense")
+    int32 InvulnerableSaveRep = 7;
+
+    UPROPERTY(Replicated, BlueprintReadOnly, Category="Stats|Defense")
+    int32 FeelNoPainRep = 7;
+
+    UFUNCTION(BlueprintPure) int32 GetInvuln() const { return InvulnerableSaveRep; }
+    UFUNCTION(BlueprintPure) int32 GetFeelNoPain() const { return FeelNoPainRep; }
 
     UPROPERTY(ReplicatedUsing=OnRep_Health) int32 WoundsPool = 0;
 
