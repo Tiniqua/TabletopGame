@@ -10,6 +10,7 @@
 
 #include "DeployRowWidget.generated.h"
 
+class UWeaponPickerWidget;
 class UTextBlock;
 class UImage;
 class UButton;
@@ -21,7 +22,14 @@ class TABLETOP_API UDeployRowWidget : public UUserWidget
 public:
 	AMatchGameState* GS() const;
 	AMatchPlayerController* MPC() const;
-	void Init(FName InUnitId, const FText& InName, UTexture2D* InIcon, int32 InCount);
+	
+	void InitDisplay(const FText& Name, UTexture2D* Icon, int32 Count);
+	void SetDeployPayload(FName InUnitId, int32 InWeaponIdx)
+	{
+		UnitId = InUnitId;
+		WeaponIndex = InWeaponIdx;
+	}
+
 
 	UPROPERTY(meta=(BindWidget)) UTextBlock* NameText = nullptr;
 	UPROPERTY(meta=(BindWidget)) UImage*     IconImg  = nullptr;
@@ -29,6 +37,10 @@ public:
 	UPROPERTY(meta=(BindWidget)) UButton*    SelectBtn= nullptr;
 
 	FName UnitId = NAME_None;
+	int32 WeaponIndex;
+
+	UPROPERTY(BlueprintReadWrite,EditAnywhere)
+	TSubclassOf<UWeaponPickerWidget> WeaponPickerClass;
 
 protected:
 	virtual void NativeConstruct() override;

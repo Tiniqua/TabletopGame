@@ -133,11 +133,11 @@ void ASetupPlayerController::Server_AdvanceFromArmy_Implementation()
 	}
 }
 
-void ASetupPlayerController::Server_SetUnitCount_Implementation(FName UnitRow, int32 Count)
+void ASetupPlayerController::Server_SetUnitCount_Implementation(FName UnitId, int32 WeaponIndex, int32 NewCount)
 {
 	if (ASetupGamemode* GM = GetWorld()->GetAuthGameMode<ASetupGamemode>())
 	{
-		GM->HandleSetUnitCount(this, Count < 0 ? UnitRow : UnitRow, FMath::Max(0, Count));
+		GM->HandleSetUnitCount(this, UnitId, WeaponIndex, FMath::Clamp(NewCount,0,99));
 	}
 }
 

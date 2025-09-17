@@ -1,5 +1,6 @@
 #include "MapSelectWidget.h"
 
+#include "DeployRowWidget.h"
 #include "NameUtils.h"
 #include "Components/TextBlock.h"
 #include "Components/ComboBoxString.h"
@@ -101,26 +102,11 @@ void UMapSelectWidget::BuildMapDropdown()
 void UMapSelectWidget::RebuildRosterPanels()
 {
     if (!P1RosterList || !P2RosterList) return;
+
     ASetupGameState* S = GS();
     if (!S) return;
 
-    auto BuildList = [&](UPanelWidget* Panel, const TArray<FUnitCount>& Roster, UDataTable* UnitsForFaction)
-    {
-        Panel->ClearChildren();
-        if (!UnitsForFaction) return;
-
-        for (const FUnitCount& E : Roster)
-        {
-            const FUnitRow* Unit = UnitsForFaction->FindRow<FUnitRow>(E.UnitId, TEXT("RosterView"));
-            if (!Unit || E.Count <= 0) continue;
-
-            UTextBlock* Line = NewObject<UTextBlock>(Panel);
-            Line->SetText(FText::FromString(FString::Printf(TEXT("%s x%d"), *Unit->DisplayName.ToString(), E.Count)));
-            Panel->AddChild(Line);
-        }
-    };
-
-    // Resolve each faction's units table
+    // Resolve Units DT from the Factions table (same logic you had)
     auto ResolveUnits = [&](EFaction Faction)->UDataTable*
     {
         if (!S->FactionsTable) return nullptr;
@@ -137,9 +123,56 @@ void UMapSelectWidget::RebuildRosterPanels()
     UDataTable* P1Units = ResolveUnits(S->P1Faction);
     UDataTable* P2Units = ResolveUnits(S->P2Faction);
 
-    BuildList(P1RosterList, S->P1Roster, P1Units);
-    BuildList(P2RosterList, S->P2Roster, P2Units);
+    auto BuildListNew = [&](UPanelWidget* Panel, const TArray<FRosterEntry>& Roster, UDataTable* UnitsDT)
+    {
+        Panel->ClearChildren();
+
+        if (!UnitsDT)
+        {
+            // Minimal fallback: just dump raw ids * xCount
+            for (const FRosterEntry& E : Roster)
+            {
+                if (E.Count <= 0) continue;
+                UTextBlock* Line = NewObject<UTextBlock>(Panel);
+                Line->SetText(FText::FromString(FString::Printf(TEXT("%s x%d"), *E.UnitId.ToString(), E.Count)));
+                Panel->AddChild(Line);
+            }
+            return;
+        }
+
+        for (const FRosterEntry& E : Roster)
+        {
+            if (E.Count <= 0) continue;
+
+            const FUnitRow* Unit = UnitsDT->FindRow<FUnitRow>(E.UnitId, TEXT("RosterView_New"));
+            if (!Unit) continue;
+
+            // Label: DisplayName — Weapon xCount  (weapon-aware)
+            FString Label = Unit->DisplayName.ToString();
+
+            if (Unit->Weapons.IsValidIndex(E.WeaponIndex))
+            {
+                Label += FString::Printf(TEXT(" — %s"),
+                    *Unit->Weapons[E.WeaponIndex].WeaponId.ToString());
+            }
+
+            Label += FString::Printf(TEXT(" x%d"), E.Count);
+
+            UTextBlock* Line = NewObject<UTextBlock>(Panel);
+            Line->SetText(FText::FromString(Label));
+            Panel->AddChild(Line);
+        }
+    };
+
+    // If your new selection is stored as UArmyData* with .Roster:
+    TArray<FRosterEntry> P1Sel = S->P1Roster;
+    TArray<FRosterEntry> P2Sel = S->P2Roster;
+
+    BuildListNew(P1RosterList, P1Sel, P1Units);
+    BuildListNew(P2RosterList, P2Sel, P2Units);
+   
 }
+
 
 void UMapSelectWidget::RefreshFromState()
 {

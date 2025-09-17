@@ -94,9 +94,10 @@ void AMatchPlayerController::SetupInputComponent()
 
 }
 
-void AMatchPlayerController::BeginDeployForUnit(FName UnitId)
+void AMatchPlayerController::BeginDeployForUnit(FName UnitId, int32 InWeaponIndex) // overload
 {
-	PendingDeployUnit = UnitId;
+	PendingDeployUnit  = UnitId;
+	PendingWeaponIndex = InWeaponIndex;
 	StartDeployCursorFeedback();
 }
 
@@ -144,9 +145,10 @@ void AMatchPlayerController::OnLeftClick()
         const FRotator YawOnly(0.f, GetControlRotation().Yaw, 0.f);
         const FTransform Where(YawOnly, Hit.ImpactPoint);
 
-        Server_RequestDeploy(PendingDeployUnit, Where);
-        PendingDeployUnit = NAME_None;
-        StopDeployCursorFeedback();
+    	Server_RequestDeploy(PendingDeployUnit, Where, PendingWeaponIndex);
+    	PendingDeployUnit  = NAME_None;
+    	PendingWeaponIndex = INDEX_NONE;
+    	StopDeployCursorFeedback();
         return;
     }
 
@@ -455,10 +457,12 @@ void AMatchPlayerController::EndPlay(const EEndPlayReason::Type Reason)
 	Super::EndPlay(Reason);
 }
 
-void AMatchPlayerController::Server_RequestDeploy_Implementation(FName UnitId, FTransform Where)
+void AMatchPlayerController::Server_RequestDeploy_Implementation(FName UnitId, const FTransform& Where, int32 WeaponIndex)
 {
 	if (AMatchGameMode* GM = GetWorld()->GetAuthGameMode<AMatchGameMode>())
-		GM->HandleRequestDeploy(this, UnitId, Where);
+	{
+		GM->HandleRequestDeploy(this, UnitId, Where, WeaponIndex);
+	}
 }
 
 void AMatchPlayerController::Server_StartBattle_Implementation()

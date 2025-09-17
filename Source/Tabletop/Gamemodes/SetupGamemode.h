@@ -19,18 +19,14 @@ enum class ESetupPhase : uint8
 };
 
 USTRUCT(BlueprintType)
-struct FUnitCount
+struct FRosterEntry
 {
 	GENERATED_BODY()
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	FName UnitId = NAME_None;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	int32 Count = 0;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite) FName UnitId = NAME_None;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 WeaponIndex = 0;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 Count = 0;
 };
-
-
 
 static FString BuildListenURL(const TSoftObjectPtr<UWorld>& Map)
 {
@@ -51,6 +47,11 @@ class TABLETOP_API ASetupGameState : public AGameStateBase
 {
 	GENERATED_BODY()
 public:
+
+	UFUNCTION(BlueprintPure)
+	UDataTable* GetUnitsDTForLocalSeat(const APlayerState* LocalSeat) const;
+
+	
 	UPROPERTY(ReplicatedUsing=OnRep_PlayerSlots, BlueprintReadOnly)
 	FString Player1Name;
 
@@ -104,17 +105,20 @@ public:
 	UPROPERTY(Replicated,ReplicatedUsing=OnRep_ReadyUp, BlueprintReadOnly)
 	bool bP2Ready = false;
 
-	UPROPERTY(ReplicatedUsing=OnRep_Rosters, BlueprintReadOnly)
-	TArray<FUnitCount> P1Roster;
-
-	UPROPERTY(ReplicatedUsing=OnRep_Rosters, BlueprintReadOnly)
-	TArray<FUnitCount> P2Roster;
+	UPROPERTY(Replicated)
+	TArray<FRosterEntry> P1Roster;
+	UPROPERTY(Replicated)
+	TArray<FRosterEntry> P2Roster;
 
 	UPROPERTY(ReplicatedUsing=OnRep_Rosters, BlueprintReadOnly)
 	int32 P1Points = 0;
 	UPROPERTY(ReplicatedUsing=OnRep_Rosters, BlueprintReadOnly)
 	int32 P2Points = 0;
 
+	int32 GetCountFor(FName UnitId, int32 WeaponIndex, bool bP1) const;
+	void  SetCountFor(FName UnitId, int32 WeaponIndex, int32 NewCount, bool bP1);
+	int32 GetTotalPoints(bool bP1) const;
+	
 	UPROPERTY(BlueprintAssignable)
 	FOnRosterChanged OnRosterChanged;
 	
@@ -171,7 +175,7 @@ public:
 	void TryAdvanceFromLobby();
 
 	UFUNCTION(BlueprintCallable)
-	void HandleSetUnitCount(APlayerController* PC, FName UnitRow, int32 Count);
+	void HandleSetUnitCount(APlayerController* PC, FName UnitRow, int32 WeaponIndex, int32 Count);
 
 	UFUNCTION(BlueprintCallable)
 	void TryAdvanceFromUnitSelection();

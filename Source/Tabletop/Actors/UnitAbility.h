@@ -28,5 +28,6 @@ public:
 	virtual void OnEvent(const FAbilityEventContext& Ctx) {}
 
 protected:
-	TWeakObjectPtr<AUnitBase> OwnerUnit;
+	UPROPERTY()
+	AUnitBase* OwnerUnit;
 };

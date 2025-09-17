@@ -69,30 +69,77 @@ void ASetupGameState::OnRep_PlayerNames()
     OnPlayerSlotsChanged.Broadcast();
 }
 
-static int32 FindIndexByUnit(const TArray<FUnitCount>& Roster, FName UnitId)
+UDataTable* ASetupGameState::GetUnitsDTForLocalSeat(const APlayerState* LocalSeat) const
 {
-    for (int32 i=0; i<Roster.Num(); ++i)
-        if (Roster[i].UnitId == UnitId) return i;
-    return INDEX_NONE;
-}
-
-static void SetCount(TArray<FUnitCount>& Roster, FName UnitId, int32 NewCount)
-{
-    const int32 Idx = FindIndexByUnit(Roster, UnitId);
-    if (NewCount <= 0)
+    if (!FactionsTable || !LocalSeat) return nullptr;
+    const bool bP1 = (LocalSeat == Player1);
+    const EFaction F = bP1 ? P1Faction : P2Faction;
+    for (const auto& Pair : FactionsTable->GetRowMap())
     {
-        if (Idx != INDEX_NONE) Roster.RemoveAt(Idx);
-        return;
+        if (const FFactionRow* FR = reinterpret_cast<const FFactionRow*>(Pair.Value))
+            if (FR->Faction == F) return FR->UnitsTable;
     }
-    if (Idx == INDEX_NONE) { FUnitCount E; E.UnitId=UnitId; E.Count=NewCount; Roster.Add(E); }
-    else                   { Roster[Idx].Count = NewCount; }
+    return nullptr;
 }
 
-static int32 GetCount(const TArray<FUnitCount>& Roster, FName UnitId)
+int32 ASetupGameState::GetCountFor(FName UnitId, int32 WeaponIndex, bool bP1) const
 {
-    const int32 Idx = FindIndexByUnit(Roster, UnitId);
-    return (Idx != INDEX_NONE) ? Roster[Idx].Count : 0;
+    const TArray<FRosterEntry>& R = bP1 ? P1Roster : P2Roster;
+    for (const FRosterEntry& E : R)
+        if (E.UnitId == UnitId && E.WeaponIndex == WeaponIndex) return E.Count;
+    return 0;
 }
+
+void ASetupGameState::SetCountFor(FName UnitId, int32 WeaponIndex, int32 NewCount, bool bP1)
+{
+    TArray<FRosterEntry>& R = bP1 ? P1Roster : P2Roster;
+    const int32 Clamped = FMath::Clamp(NewCount, 0, 99);
+
+    // find row
+    int32 idx = INDEX_NONE;
+    for (int32 i=0;i<R.Num();++i)
+        if (R[i].UnitId == UnitId && R[i].WeaponIndex == WeaponIndex) { idx = i; break; }
+
+    if (Clamped <= 0)
+    {
+        if (idx != INDEX_NONE) R.RemoveAt(idx);
+    }
+    else
+    {
+        if (idx == INDEX_NONE) { R.Add({UnitId, WeaponIndex, Clamped}); }
+        else                   { R[idx].Count = Clamped; }
+    }
+
+    OnRosterChanged.Broadcast();
+
+    // recompute points
+    const int32 NewPts = GetTotalPoints(bP1);
+    if (bP1) P1Points = NewPts; else P2Points = NewPts;
+    OnRep_Rosters(); // or broadcast + ForceNetUpdate()
+    ForceNetUpdate();
+}
+
+int32 ASetupGameState::GetTotalPoints(bool bP1) const
+{
+    const TArray<FRosterEntry>& R = bP1 ? P1Roster : P2Roster;
+    const EFaction F = bP1 ? P1Faction : P2Faction;
+
+    UDataTable* Units = nullptr;
+    if (FactionsTable)
+        for (const auto& Pair : FactionsTable->GetRowMap())
+            if (const FFactionRow* FR = reinterpret_cast<const FFactionRow*>(Pair.Value))
+                if (FR->Faction == F) { Units = FR->UnitsTable; break; }
+
+    int32 Sum = 0;
+    if (!Units) return 0;
+
+    for (const FRosterEntry& E : R)
+        if (const FUnitRow* Row = Units->FindRow<FUnitRow>(E.UnitId, TEXT("PointsCalc")))
+            Sum += Row->Points * FMath::Max(0, E.Count);
+
+    return Sum;
+}
+
 
 void ASetupGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
@@ -305,50 +352,13 @@ int32 ASetupGamemode::ComputeRosterPoints(UDataTable* UnitsTable, const TMap<FNa
     return Total;
 }
 
-void ASetupGamemode::HandleSetUnitCount(APlayerController* PC, FName UnitRow, int32 Count)
+void ASetupGamemode::HandleSetUnitCount(APlayerController* PC, FName UnitRow, int32 WeaponIndex, int32 Count)
 {
-    if (!HasAuthority() || !PC) return;
+    if (!PC) return;
     if (ASetupGameState* S = GS())
     {
-        Count = FMath::Clamp(Count, 0, 99);
-
-        const bool bIsP1 = (PC->PlayerState == S->Player1);
-        const bool bIsP2 = (PC->PlayerState == S->Player2);
-        if (!bIsP1 && !bIsP2) return;
-
-        const EFaction Faction = bIsP1 ? S->P1Faction : S->P2Faction;
-        UDataTable* Units = GetUnitsTableForFaction(Faction);
-        if (!Units) return;
-
-        if (!Units->FindRow<FUnitRow>(UnitRow, TEXT("HandleSetUnitCount"))) return;
-
-        // Update GS roster & points
-        TArray<FUnitCount>& R = bIsP1 ? S->P1Roster : S->P2Roster;
-        SetCount(R, UnitRow, Count);
-
-        int32& Points = bIsP1 ? S->P1Points : S->P2Points;
-        Points = 0;
-        for (const FUnitCount& E : R)
-            if (const FUnitRow* Row = Units->FindRow<FUnitRow>(E.UnitId, TEXT("Recompute")))
-                if (E.Count > 0) Points += Row->Points * E.Count;
-
-        const int32 Cap = 2000;
-        if (bIsP1 && S->bP1Ready && Points > Cap) S->bP1Ready = false;
-        if (bIsP2 && S->bP2Ready && Points > Cap) S->bP2Ready = false;
-
-        // Mirror into PlayerState (so it’s always up-to-date pre-travel)
-        if (ATabletopPlayerState* TPS = PC->GetPlayerState<ATabletopPlayerState>())
-        {
-            TPS->Roster = R; // copy array of FUnitCount
-        }
-        else
-        {
-            UE_LOG(LogTemp, Warning, TEXT("HandleSetUnitCount: PlayerState is not ATabletopPlayerState"));
-        }
-
-        S->OnRosterChanged.Broadcast();
-        S->OnPlayerReadyUp.Broadcast();
-        S->ForceNetUpdate();
+        const bool bP1 = (PC->PlayerState == S->Player1);
+        S->SetCountFor(UnitRow, WeaponIndex, Count, bP1);
     }
 }
 

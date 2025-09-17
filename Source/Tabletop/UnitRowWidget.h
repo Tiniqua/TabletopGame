@@ -17,6 +17,9 @@ public:
 	// Init from parent after CreateWidget
 	void Init(FName InUnitId, const FText& InDisplayName, int32 InUnitPoints);
 
+	UFUNCTION(BlueprintCallable)
+	void OnWeaponChanged(FString Selected, ESelectInfo::Type SelectionType);
+
 protected:
 	virtual void NativeConstruct() override;
 	virtual void NativeDestruct() override;
@@ -27,6 +30,12 @@ protected:
 	UPROPERTY(meta=(BindWidget)) UTextBlock* CountText  = nullptr;
 	UPROPERTY(meta=(BindWidget)) UButton*    MinusBtn   = nullptr;
 	UPROPERTY(meta=(BindWidget)) UButton*    PlusBtn    = nullptr;
+
+	UPROPERTY(meta=(BindWidget))
+	class UComboBoxString* WeaponCombo;
+
+	int32 CurrentWeaponIdx = 0;
+	TArray<FName> WeaponDisplay;
 
 private:
 	// data

@@ -20,7 +20,7 @@ public:
 	EFaction SelectedFaction;
 	
 	UPROPERTY(Replicated, BlueprintReadOnly)
-	TArray<FUnitCount> Roster;
+	TArray<FRosterEntry> Roster;
 
 	UPROPERTY(Replicated, BlueprintReadOnly, Category="Player")
 	FString ShortDisplayName;

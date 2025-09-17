@@ -36,8 +36,8 @@ public:
 	UFUNCTION(Server, Reliable, BlueprintCallable)
 	void Server_AdvanceFromArmy();
 
-	UFUNCTION(Server, Reliable, BlueprintCallable)
-	void Server_SetUnitCount(FName UnitRow, int32 Count);
+	UFUNCTION(Server, Reliable)
+	void Server_SetUnitCount(FName UnitId, int32 WeaponIndex, int32 NewCount);
 
 	UFUNCTION(Server, Reliable, BlueprintCallable)
 	void Server_AdvanceFromUnits();

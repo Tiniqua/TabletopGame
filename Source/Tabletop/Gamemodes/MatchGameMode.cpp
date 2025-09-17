@@ -1273,11 +1273,6 @@ APlayerState* AMatchGameMode::OtherPlayer(APlayerState* PS) const
     return nullptr;
 }
 
-int32 AMatchGameMode::FindIdx(TArray<FUnitCount>& Arr, FName Unit)
-{
-    for (int32 i=0;i<Arr.Num();++i) if (Arr[i].UnitId == Unit) return i;
-    return INDEX_NONE;
-}
 
 bool AMatchGameMode::CanDeployAt(APlayerController* PC, const FVector& Location) const
 {
@@ -1300,8 +1295,8 @@ void AMatchGameMode::CopyRostersFromPlayerStates()
 {
     if (AMatchGameState* S = GS())
     {
-        S->P1Remaining = S->P1 ? S->P1->Roster : TArray<FUnitCount>{};
-        S->P2Remaining = S->P2 ? S->P2->Roster : TArray<FUnitCount>{};
+        S->P1Remaining = S->P1 ? S->P1->Roster : TArray<FRosterEntry>{};
+        S->P2Remaining = S->P2 ? S->P2->Roster : TArray<FRosterEntry>{};
     }
 }
 
@@ -1310,26 +1305,34 @@ bool AMatchGameMode::AnyRemainingFor(APlayerState* PS) const
     if (const AMatchGameState* S = GS())
     {
         const bool bIsP1 = (PS == S->P1);
-        const TArray<FUnitCount>& R = bIsP1 ? S->P1Remaining : S->P2Remaining;
-        for (const FUnitCount& E : R) if (E.Count > 0) return true;
+        const TArray<FRosterEntry>& R = bIsP1 ? S->P1Remaining : S->P2Remaining;
+        for (const FRosterEntry& E : R) if (E.Count > 0) return true;
     }
     return false;
 }
 
-bool AMatchGameMode::DecrementOne(APlayerState* PS, FName UnitId)
+static int32 FindIdx(TArray<FRosterEntry>& Arr, FName Unit, int32 WeaponIndex)
 {
-    if (AMatchGameState* S = GS())
-    {
-        const bool bIsP1 = (PS == S->P1);
-        TArray<FUnitCount>& R = bIsP1 ? S->P1Remaining : S->P2Remaining;
-        if (int32 Idx = FindIdx(R, UnitId); Idx != INDEX_NONE && R[Idx].Count > 0)
-        {
-            R[Idx].Count -= 1;
-            if (R[Idx].Count <= 0) R.RemoveAt(Idx);
-            return true;
-        }
-    }
-    return false;
+	for (int32 i=0; i<Arr.Num(); ++i)
+		if (Arr[i].UnitId == Unit && Arr[i].WeaponIndex == WeaponIndex)
+			return i;
+	return INDEX_NONE;
+}
+
+bool AMatchGameMode::DecrementOne(APlayerState* PS, FName UnitId, int32 WeaponIndex)
+{
+	if (AMatchGameState* S = GS())
+	{
+		const bool bIsP1 = (PS == S->P1);
+		TArray<FRosterEntry>& R = bIsP1 ? S->P1Remaining : S->P2Remaining;
+		if (int32 Idx = FindIdx(R, UnitId, WeaponIndex); Idx != INDEX_NONE && R[Idx].Count > 0)
+		{
+			R[Idx].Count -= 1;
+			if (R[Idx].Count <= 0) R.RemoveAt(Idx);
+			return true;
+		}
+	}
+	return false;
 }
 
 UDataTable* AMatchGameMode::UnitsForFaction(EFaction Faction) const
@@ -1361,7 +1364,7 @@ TSubclassOf<AActor> AMatchGameMode::UnitClassFor(APlayerState* ForPS, FName Unit
     return DefaultClass;
 }
 
-void AMatchGameMode::HandleRequestDeploy(APlayerController* PC, FName UnitId, const FTransform& Where)
+void AMatchGameMode::HandleRequestDeploy(APlayerController* PC, FName UnitId, const FTransform& Where, int32 WeaponIndex)
 {
     if (!HasAuthority() || !PC) return;
 
@@ -1375,7 +1378,7 @@ void AMatchGameMode::HandleRequestDeploy(APlayerController* PC, FName UnitId, co
             return;
         }
 
-        if (!DecrementOne(PC->PlayerState.Get(), UnitId))
+    	if (!DecrementOne(PC->PlayerState.Get(), UnitId, WeaponIndex))
         {
             UE_LOG(LogTemp, Warning, TEXT("Deploy denied: unit %s not available in remaining roster."), *UnitId.ToString());
             return;
@@ -1395,7 +1398,7 @@ void AMatchGameMode::HandleRequestDeploy(APlayerController* PC, FName UnitId, co
             return;
         }
 
-        const FUnitRow* Row = UnitsDT->FindRow<FUnitRow>(UnitId, TEXT("HandleRequestDeploy"));
+    	const FUnitRow* Row = UnitsDT->FindRow<FUnitRow>(UnitId, TEXT("HandleRequestDeploy"));
         if (!Row)
         {
             UE_LOG(LogTemp, Warning, TEXT("Deploy denied: UnitId %s not found in faction table."), *UnitId.ToString());
@@ -1417,13 +1420,13 @@ void AMatchGameMode::HandleRequestDeploy(APlayerController* PC, FName UnitId, co
             UE_LOG(LogTemp, Warning, TEXT("Deploy failed: spawn returned null for %s."), *UnitId.ToString());
             return;
         }
-
-        if (AUnitBase* UB = Cast<AUnitBase>(Spawned))
-        {
-            UB->Server_InitFromRow(PC->PlayerState.Get(), *Row, Row->DefaultWeaponIndex);
-            UB->FaceNearestEnemyInstant();
-            NotifyUnitTransformChanged(UB);
-        }
+    	
+    	if (AUnitBase* UB = Cast<AUnitBase>(Spawned))
+    	{
+    		UB->Server_InitFromRow(PC->PlayerState.Get(), *Row, WeaponIndex);
+    		UB->FaceNearestEnemyInstant();
+    		NotifyUnitTransformChanged(UB);
+    	}
         else
         {
             UE_LOG(LogTemp, Warning, TEXT("Deploy note: Spawned class %s is not AUnitBase for %s; skipping runtime init."),

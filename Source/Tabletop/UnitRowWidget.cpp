@@ -2,6 +2,7 @@
 #include "UnitRowWidget.h"
 
 #include "Components/Button.h"
+#include "Components/ComboBoxString.h"
 #include "Components/TextBlock.h"
 #include "Controllers/SetupPlayerController.h"
 #include "Gamemodes/SetupGamemode.h"
@@ -17,7 +18,38 @@ void UUnitRowWidget::Init(FName InUnitId, const FText& InDisplayName, int32 InUn
     if (NameText)   NameText->SetText(InDisplayName);
     if (PointsText) PointsText->SetText(FText::AsNumber(UnitPoints));
 
+    if (ASetupGameState* S = GS())
+    {
+        UDataTable* UnitsTable = S->GetUnitsDTForLocalSeat(PC()->PlayerState);
+        if (const FUnitRow* Row = UnitsTable ? UnitsTable->FindRow<FUnitRow>(UnitId, TEXT("UnitRowWeaponList")) : nullptr)
+        {
+            if (WeaponCombo)
+            {
+                WeaponCombo->ClearOptions();
+                WeaponDisplay.Reset();
+                for (int32 i=0;i<Row->Weapons.Num();++i)
+                {
+                    const FWeaponProfile& W = Row->Weapons[i];
+                    const FString Label = FString::Printf(TEXT("%s  (R%d A%d S%d AP%d D%d)"),
+                        *W.WeaponId.ToString(), W.RangeInches, W.Attacks, W.Strength, W.AP, W.Damage);
+                    WeaponDisplay.Add(*Label);
+                    WeaponCombo->AddOption(Label);
+                }
+                WeaponCombo->SetSelectedIndex(0);
+                CurrentWeaponIdx = 0;
+                WeaponCombo->OnSelectionChanged.AddDynamic(this, &UUnitRowWidget::OnWeaponChanged);
+            }
+        }
+    }
+
     // Set initial count from GS if already present
+    ApplyCountToUI(GetLocalSeatCount());
+}
+
+void UUnitRowWidget::OnWeaponChanged(FString /*Selected*/, ESelectInfo::Type)
+{
+    if (WeaponCombo)
+        CurrentWeaponIdx = WeaponCombo->GetSelectedIndex();
     ApplyCountToUI(GetLocalSeatCount());
 }
 
@@ -51,13 +83,10 @@ int32 UUnitRowWidget::GetLocalSeatCount() const
 {
     if (const ASetupGameState* S = GS())
         if (const ASetupPlayerController* LPC = PC())
-            if (LPC->PlayerState)
-            {
-                const bool bIsP1 = (LPC->PlayerState == S->Player1);
-                const TArray<FUnitCount>& R = bIsP1 ? S->P1Roster : S->P2Roster;
-                for (const FUnitCount& E : R)
-                    if (E.UnitId == UnitId) return E.Count;
-            }
+        {
+            const bool bP1 = (LPC->PlayerState == S->Player1);
+            return S->GetCountFor(UnitId, CurrentWeaponIdx, bP1);
+        }
     return 0;
 }
 
@@ -69,10 +98,7 @@ void UUnitRowWidget::ApplyCountToUI(int32 Count) const
 void UUnitRowWidget::SendCountToServer(int32 NewCount) const
 {
     if (ASetupPlayerController* LPC = PC())
-    {
-        NewCount = FMath::Clamp(NewCount, 0, 99);
-        LPC->Server_SetUnitCount(UnitId, NewCount);
-    }
+        LPC->Server_SetUnitCount(UnitId, CurrentWeaponIdx, FMath::Clamp(NewCount,0,99));
 }
 
 void UUnitRowWidget::HandleMinus()

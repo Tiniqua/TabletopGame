@@ -284,6 +284,8 @@ public:
     // Local-only visual toggle (safe on clients and listen server)
     UFUNCTION(BlueprintCallable, Category="Selection|Outline")
     void SetHighlightLocal(EUnitHighlight Mode);
+
+    
     
 protected:
     virtual void BeginPlay() override;
@@ -292,6 +294,8 @@ protected:
     UFUNCTION() void OnRep_Move();
 
     void RebuildFormation();
+    void RebuildRuntimeActions();
+    void RebuildRuntimeAbilitiesFromSources();
 
     virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Out) const override;
 

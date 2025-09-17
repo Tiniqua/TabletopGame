@@ -132,50 +132,97 @@ void UDeploymentWidget::RebuildUnitPanels()
     APlayerController* OPC = GetOwningPlayer();
     if (!S || !OPC || !OPC->PlayerState) return;
 
-    // ✅ P1/P2 is the ground truth for these arrays
-    const bool bIsLocalP1 = (OPC->PlayerState == S->P1);
-
-    const TArray<FUnitCount>& LocalRem = bIsLocalP1 ? S->P1Remaining : S->P2Remaining;
-    const TArray<FUnitCount>& OppRem   = bIsLocalP1 ? S->P2Remaining : S->P1Remaining;
-
-    // (Optional) debug to catch accidental regressions:
-    if (const ATabletopPlayerState* LocalPS = OPC->GetPlayerState<ATabletopPlayerState>())
-    {
-        if (LocalPS->TeamNum == 1 && !bIsLocalP1)
-        {
-            UE_LOG(LogTemp, Warning, TEXT("DeploymentWidget: Local is Team 1 but NOT P1. "
-                   "Using pointer mapping (correct). This is expected when P2 is Team 1."));
-        }
-        if (LocalPS->TeamNum == 2 && bIsLocalP1)
-        {
-            UE_LOG(LogTemp, Warning, TEXT("DeploymentWidget: Local is Team 2 but IS P1. "
-                   "Using pointer mapping (correct). This is expected when P1 is Team 2."));
-        }
-    }
-
+    // Clear previous entries
     LocalUnitsPanel->ClearChildren();
     if (OppUnitsPanel) OppUnitsPanel->ClearChildren();
 
-    for (const FUnitCount& E : LocalRem)
+    const bool bIsLocalP1 = (OPC->PlayerState == S->P1);
+
+    // ---------- LOCAL SIDE ----------
     {
-        if (E.Count <= 0) continue;
-        if (UDeployRowWidget* Row = CreateWidget<UDeployRowWidget>(GetOwningPlayer(), DeployRowClass))
+        const TArray<FRosterEntry>& LocalRem = bIsLocalP1 ? S->P1Remaining : S->P2Remaining;
+
+        // Resolve Units DT for the local player's faction (if available on this machine)
+        UDataTable* LocalUnitsDT = nullptr;
+        if (AMatchGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<AMatchGameMode>() : nullptr)
         {
-            Row->Init(E.UnitId, FText::FromString(E.UnitId.ToString()), nullptr, E.Count);
-            LocalUnitsPanel->AddChild(Row);
+            if (const ATabletopPlayerState* LocalTPS = OPC->GetPlayerState<ATabletopPlayerState>())
+            {
+                LocalUnitsDT = GM->UnitsForFaction(LocalTPS->SelectedFaction);
+            }
+        }
+
+        for (const FRosterEntry& E : LocalRem)
+        {
+            if (E.Count <= 0) continue;
+
+            FString Label = E.UnitId.ToString();
+
+            if (LocalUnitsDT)
+            {
+                if (const FUnitRow* Row = LocalUnitsDT->FindRow<FUnitRow>(E.UnitId, TEXT("DeployLabel_Local")))
+                {
+                    if (Row->Weapons.IsValidIndex(E.WeaponIndex))
+                    {
+                        Label += FString::Printf(TEXT(" — %s"), *Row->Weapons[E.WeaponIndex].WeaponId.ToString());
+                    }
+                }
+            }
+
+            if (UDeployRowWidget* RowW = CreateWidget<UDeployRowWidget>(GetOwningPlayer(), DeployRowClass))
+            {
+                RowW->InitDisplay(FText::FromString(Label), /*Icon*/nullptr, E.Count);
+                RowW->SetDeployPayload(E.UnitId, E.WeaponIndex);
+                LocalUnitsPanel->AddChild(RowW);
+            }
         }
     }
 
+    // ---------- OPPONENT SIDE ----------
     if (OppUnitsPanel)
     {
-        for (const FUnitCount& E : OppRem)
+        const TArray<FRosterEntry>& OppRem = bIsLocalP1 ? S->P2Remaining : S->P1Remaining;
+
+        // Resolve Units DT for the opponent's faction (if available on this machine)
+        UDataTable* OppUnitsDT = nullptr;
+        if (AMatchGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<AMatchGameMode>() : nullptr)
+        {
+            const ATabletopPlayerState* OppTPS = bIsLocalP1
+                ? (S->P2 ? Cast<ATabletopPlayerState>(S->P2) : nullptr)
+                : (S->P1 ? Cast<ATabletopPlayerState>(S->P1) : nullptr);
+
+            if (OppTPS)
+            {
+                OppUnitsDT = GM->UnitsForFaction(OppTPS->SelectedFaction);
+            }
+        }
+
+        for (const FRosterEntry& E : OppRem)
         {
             if (E.Count <= 0) continue;
-            if (UDeployRowWidget* Row = CreateWidget<UDeployRowWidget>(GetOwningPlayer(), DeployRowClass))
+
+            FString Label = E.UnitId.ToString();
+
+            if (OppUnitsDT)
             {
-                Row->Init(E.UnitId, FText::FromString(E.UnitId.ToString()), nullptr, E.Count);
-                if (Row->SelectBtn) Row->SelectBtn->SetIsEnabled(false);
-                OppUnitsPanel->AddChild(Row);
+                if (const FUnitRow* Row = OppUnitsDT->FindRow<FUnitRow>(E.UnitId, TEXT("DeployLabel_Opp")))
+                {
+                    if (Row->Weapons.IsValidIndex(E.WeaponIndex))
+                    {
+                        Label += FString::Printf(TEXT(" — %s"), *Row->Weapons[E.WeaponIndex].WeaponId.ToString());
+                    }
+                }
+            }
+
+            if (UDeployRowWidget* RowW = CreateWidget<UDeployRowWidget>(GetOwningPlayer(), DeployRowClass))
+            {
+                RowW->InitDisplay(FText::FromString(Label), /*Icon*/nullptr, E.Count);
+
+                // Show as read-only on the opponent side (no deploying from this list)
+                RowW->SetIsEnabled(false);
+
+                // (Don’t set deploy payload, since this list is informational)
+                OppUnitsPanel->AddChild(RowW);
             }
         }
     }

@@ -13,6 +13,7 @@
 #include "MatchGameMode.generated.h"
 
 
+struct FRosterEntry;
 class ATabletopPlayerState;
 class ANetDebugTextActor;
 
@@ -51,7 +52,7 @@ struct FMatchSummary
 };
 
 enum class EFaction : uint8;
-struct FUnitCount;
+
 UENUM(BlueprintType)
 enum class EMatchPhase : uint8
 {
@@ -176,8 +177,8 @@ public:
 	UPROPERTY(ReplicatedUsing=OnRep_Deployment) APlayerState* CurrentDeployer = nullptr;
 
 	// Remaining counts to place (copied from each PlayerState.Roster at start)
-	UPROPERTY(ReplicatedUsing=OnRep_Deployment) TArray<FUnitCount> P1Remaining;
-	UPROPERTY(ReplicatedUsing=OnRep_Deployment) TArray<FUnitCount> P2Remaining;
+	UPROPERTY(ReplicatedUsing=OnRep_Deployment) TArray<FRosterEntry> P1Remaining;
+	UPROPERTY(ReplicatedUsing=OnRep_Deployment) TArray<FRosterEntry> P2Remaining;
 
 	// True once both remaining arrays are empty
 	UPROPERTY(ReplicatedUsing=OnRep_Deployment) bool bDeploymentComplete = false;
@@ -249,7 +250,7 @@ public:
 	FShotResolveResult ResolveRangedAttack_Internal(AUnitBase* Attacker, AUnitBase* Target, const TCHAR* DebugPrefix);
 	
 	// Server RPC endpoints (called by PC server functions)
-	void HandleRequestDeploy(class APlayerController* PC, FName UnitId, const FTransform& Where);
+	void HandleRequestDeploy(APlayerController* PC, FName UnitId, const FTransform& Where, int32 WeaponIndex);
 	void HandleStartBattle(class APlayerController* PC);
 	void HandleEndPhase(class APlayerController* PC);
 	void ScoreObjectivesForRound();
@@ -311,7 +312,8 @@ public:
 	bool QueryCover(class AUnitBase* Attacker, class AUnitBase* Target,
 					int32& OutHitMod, int32& OutSaveMod, ECoverType& OutType) const;
 
-
+	UDataTable* UnitsForFaction(EFaction Faction) const;
+	
 protected:
 	virtual void BeginPlay() override;
 	virtual void PostLogin(APlayerController* NewPlayer) override;
@@ -327,12 +329,11 @@ private:
 	UPROPERTY(EditAnywhere, Category="Scale")
 	float TabletopToUnrealInchScale = 20.f; // 1 tabletop inch == 20 UE inches (exact). Use 19.685 for 50 cm/in.
 	
-	static int32 FindIdx(TArray<FUnitCount>& Arr, FName Unit);
 	bool CanDeployAt(APlayerController* PC, const FVector& WorldLocation) const;
 	void CopyRostersFromPlayerStates();
 	bool AnyRemainingFor(APlayerState* PS) const;
-	bool DecrementOne(APlayerState* PS, FName UnitId);
+	bool DecrementOne(APlayerState* PS, FName UnitId, int32 WeaponIndex);
 	void FinishDeployment();
-	UDataTable* UnitsForFaction(EFaction Faction) const;
+	
 	TSubclassOf<AActor> UnitClassFor(APlayerState* ForPS, FName UnitId) const;
 };

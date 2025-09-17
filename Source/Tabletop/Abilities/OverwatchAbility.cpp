@@ -1,9 +1,13 @@
 ﻿
 #include "OverwatchAbility.h"
 
+#include "Tabletop/Actors/UnitAction.h"
+
 UOverwatchAbility::UOverwatchAbility()
 {
-	AbilityId=TEXT("Overwatch"); DisplayName=FText::FromString("Overwatch");
+	AbilityId   = TEXT("Overwatch");
+	DisplayName = NSLOCTEXT("Abilities", "Overwatch", "Overwatch");
+	GrantsAction = UAction_Overwatch::StaticClass();
 }
 
 void UOverwatchAbility::Setup(AUnitBase* Owner)

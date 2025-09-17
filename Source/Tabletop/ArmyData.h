@@ -56,6 +56,9 @@ struct FWeaponProfile
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32   AP = 0;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32   Damage = 1;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) TArray<FWeaponKeywordData> Keywords;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite)
+    TArray<TSubclassOf<class UUnitAbility>> AbilityClasses;
 };
 
 USTRUCT(BlueprintType)

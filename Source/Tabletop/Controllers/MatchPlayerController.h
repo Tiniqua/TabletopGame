@@ -69,10 +69,11 @@ public:
 	virtual void SetupInputComponent() override;
 
 	UFUNCTION(BlueprintCallable)
-	void BeginDeployForUnit(FName UnitId);
+	void BeginDeployForUnit(FName UnitId,int32 InWeaponIndex);
 	
-	UFUNCTION(Server, Reliable, BlueprintCallable)
-	void Server_RequestDeploy(FName UnitId, FTransform Where);
+	UFUNCTION(Server, Reliable)
+	void Server_RequestDeploy(FName UnitId, const FTransform& Where, int32 WeaponIndex);
+	//void Server_RequestDeploy(FName UnitId, FTransform Where, int32 WeaponIndex);
 
 	UFUNCTION(Server, Reliable, BlueprintCallable)
 	void Server_StartBattle();
@@ -119,6 +120,9 @@ public:
 	
 	UPROPERTY()
 	FName PendingGroundActionId = NAME_None;
+
+	UPROPERTY()
+	int32 PendingWeaponIndex = INDEX_NONE;
 
 	UPROPERTY()
 	TObjectPtr<AUnitBase> PendingActionUnit = nullptr;

@@ -3,4 +3,5 @@
 
 void UUnitAbility::Setup(AUnitBase* Owner)
 {
+	OwnerUnit = Owner;
 }

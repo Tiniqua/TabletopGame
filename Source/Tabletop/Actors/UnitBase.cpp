@@ -80,6 +80,23 @@ void AUnitBase::Server_InitFromRow(APlayerState* OwnerPS, const FUnitRow& Row, i
     {
         WeaponIndex   = FMath::Clamp(InWeaponIndex, 0, Row.Weapons.Num() - 1);
         CurrentWeapon = Row.Weapons[WeaponIndex];        // 🔹 single source of truth
+        for (TSubclassOf<UUnitAbility> AC : CurrentWeapon.AbilityClasses)
+        {
+            if (!*AC) continue;
+            if (UUnitAbility* Ab = NewObject<UUnitAbility>(this, AC))
+            {
+                RuntimeAbilities.Add(Ab);
+                Ab->Setup(this);
+                if (Ab->GrantsAction)
+                {
+                    if (UUnitAction* GA = NewObject<UUnitAction>(this, Ab->GrantsAction))
+                    {
+                        GA->Setup(this);
+                        RuntimeActions.Add(GA);
+                    }
+                }
+            }
+        }
     }
     else
     {
@@ -87,35 +104,8 @@ void AUnitBase::Server_InitFromRow(APlayerState* OwnerPS, const FUnitRow& Row, i
         CurrentWeapon = FWeaponProfile{};                // defaults (Range=24 etc. if you set)
     }
 
-    RuntimeActions.Empty();
-    RuntimeActions.Add(NewObject<UAction_Move>(this));
-    RuntimeActions.Add(NewObject<UAction_Advance>(this));
-    RuntimeActions.Add(NewObject<UAction_Shoot>(this));
-    RuntimeActions.Add(NewObject<UAction_Overwatch>(this));
-    
-    for (UUnitAction* A : RuntimeActions) if (A) A->Setup(this);
-
-    // Create abilities from DT
-    RuntimeAbilities.Empty();
-    for (TSubclassOf<UUnitAbility> AC : Row.AbilityClasses)
-    if (AC)
-    {
-        if (UUnitAbility* Ab = NewObject<UUnitAbility>(this, AC))
-        {
-            RuntimeAbilities.Add(Ab);
-            Ab->Setup(this);
-            if (Ab->GetClass()->FindPropertyByName(TEXT("GrantsAction")))
-            {
-                if (UUnitAction* GA = Ab->GrantsAction ? NewObject<UUnitAction>(this, Ab->GrantsAction) : nullptr)
-                {
-                    GA->Setup(this);
-                    RuntimeActions.Add(GA);
-                }
-            }
-        }
-    }
     AbilityClassesRep = Row.AbilityClasses;
-    EnsureRuntimeBuilt();
+    RebuildRuntimeActions();
     
     // Snapshots for UI/fast access stay in sync with CurrentWeapon
     SyncWeaponSnapshotsFromCurrent();
@@ -263,7 +253,7 @@ void AUnitBase::OnRep_CurrentWeapon()
 {
     // Keep cached ints consistent on clients
     SyncWeaponSnapshotsFromCurrent();
-    EnsureRuntimeBuilt();
+    RebuildRuntimeActions();
 }
 
 void AUnitBase::ApplyAPPhaseStart(ETurnPhase Phase)
@@ -649,6 +639,61 @@ void AUnitBase::OnRep_Move()
 {
     // Hook for UI if needed
     EnsureRuntimeBuilt();
+}
+
+void AUnitBase::RebuildRuntimeAbilitiesFromSources()
+{
+    RuntimeAbilities.Empty();
+
+    auto AddAbilityList = [&](const TArray<TSubclassOf<UUnitAbility>>& Classes)
+    {
+        for (TSubclassOf<UUnitAbility> AC : Classes)
+        {
+            if (!*AC) continue;
+            if (UUnitAbility* Ab = NewObject<UUnitAbility>(this, AC))
+            {
+                RuntimeAbilities.Add(Ab);
+                Ab->Setup(this);
+            }
+        }
+    };
+
+    // Row-level abilities (replicated via AbilityClassesRep already)
+    AddAbilityList(AbilityClassesRep);
+
+    // Weapon-level abilities
+    AddAbilityList(CurrentWeapon.AbilityClasses);
+}
+
+void AUnitBase::RebuildRuntimeActions()
+{
+    RuntimeActions.Empty();
+
+    // Base kit
+    RuntimeActions.Add(NewObject<UAction_Move>(this));
+    RuntimeActions.Add(NewObject<UAction_Advance>(this));
+    RuntimeActions.Add(NewObject<UAction_Shoot>(this));
+    //RuntimeActions.Add(NewObject<UAction_Overwatch>(this)); // if you keep it global
+
+    // (Re)build abilities first
+    RebuildRuntimeAbilitiesFromSources();
+
+    // Abilities may grant actions
+    for (UUnitAbility* Ab : RuntimeAbilities)
+    {
+        if (!Ab) continue;
+        if (Ab->GetClass()->FindPropertyByName(TEXT("GrantsAction")))
+        {
+            if (UUnitAction* GA = Ab->GrantsAction ? NewObject<UUnitAction>(this, Ab->GrantsAction) : nullptr)
+            {
+                GA->Setup(this);
+                RuntimeActions.Add(GA);
+            }
+        }
+    }
+
+    // Final setup pass (safe if called twice)
+    for (UUnitAction* A : RuntimeActions) if (A) A->Setup(this);
 }
 
 void AUnitBase::RebuildFormation()
