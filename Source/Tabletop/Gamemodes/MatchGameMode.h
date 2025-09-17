@@ -292,26 +292,20 @@ protected:
 
 private:
 	UFUNCTION(BlueprintCallable, Category="Round")
-	void ResetUnitRoundStateFor(class APlayerState* TurnOwner);
+	void ResetUnitRoundStateFor(APlayerState* TurnOwner);
 	
-	class AMatchGameState* GS() const { return GetGameState<AMatchGameState>(); }
+	AMatchGameState* GS() const { return GetGameState<AMatchGameState>(); }
 
 	APlayerState* OtherPlayer(APlayerState* PS) const;
 
 	UPROPERTY(EditAnywhere, Category="Scale")
 	float TabletopToUnrealInchScale = 20.f; // 1 tabletop inch == 20 UE inches (exact). Use 19.685 for 50 cm/in.
-
-	// Helper (cm per tabletop inch)
 	
 	static int32 FindIdx(TArray<FUnitCount>& Arr, FName Unit);
 	bool CanDeployAt(APlayerController* PC, const FVector& WorldLocation) const;
-	void Server_RequestDeploy_Implementation(APlayerController* PC, TSubclassOf<AActor> UnitClass,
-	                                         const FTransform& DesiredTransform);
 	void CopyRostersFromPlayerStates();
-	void RollFirstDeployer();
 	bool AnyRemainingFor(APlayerState* PS) const;
 	bool DecrementOne(APlayerState* PS, FName UnitId);
-	void AdvanceTurnAfterSuccessfulDeploy();
 	void FinishDeployment();
 	UDataTable* UnitsForFaction(EFaction Faction) const;
 	TSubclassOf<AActor> UnitClassFor(APlayerState* ForPS, FName UnitId) const;

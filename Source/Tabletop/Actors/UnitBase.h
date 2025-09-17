@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "UnitAction.h"
 #include "GameFramework/Actor.h"
 #include "Tabletop/ArmyData.h"
 #include "Tabletop/CombatEffects.h"   // FRollModifiers / ECombatEvent
@@ -20,6 +21,17 @@ enum class EUnitHighlight : uint8
     None      UMETA(DisplayName="None"),
     Friendly  UMETA(DisplayName="Friendly"),
     Enemy     UMETA(DisplayName="Enemy")
+};
+
+USTRUCT()
+struct FActionUsageEntry
+{
+    GENERATED_BODY()
+
+    UPROPERTY() FName  ActionId = NAME_None;
+    UPROPERTY() int16  PerPhase = 0;
+    UPROPERTY() int16  PerTurn  = 0;
+    UPROPERTY() int16  PerMatch = 0;
 };
 
 UCLASS()
@@ -44,11 +56,28 @@ public:
     TArray< UUnitAbility*> RuntimeAbilities;
 
     UPROPERTY(ReplicatedUsing=OnRep_AbilityClasses)
-    TArray<TSubclassOf<class UUnitAbility>> AbilityClassesRep;
+    TArray<TSubclassOf<UUnitAbility>> AbilityClassesRep;
+
+    UPROPERTY(ReplicatedUsing=OnRep_ActionUsage)
+    TArray<FActionUsageEntry> ActionUsageRep;
+
+    UPROPERTY()
+    TMap<FName, FActionUsageEntry> ActionUsageRuntime;
+
+    UFUNCTION()
+    void OnRep_ActionUsage();
+    bool CanUseActionNow(const FActionDescriptor& D) const;
+
+    UPROPERTY(Replicated)
+    int32 NextPhaseAPDebt = 0;
 
     UFUNCTION()
     void OnRep_AbilityClasses();
 
+    FActionUsageEntry* FindOrAddUsage(AUnitBase* U, FName Id);
+    void ResetUsageForPhase();
+    void ResetUsageForTurn();
+    void BumpUsage(const FActionDescriptor& D);
     // Helper you can call from both server + clients
     void EnsureRuntimeBuilt();
 
@@ -178,29 +207,27 @@ public:
     float ModelYawVisualOffsetDeg = 0.0f;
 
     // ===== Visual-only facing (no actor rotation) =====
-    UFUNCTION(BlueprintCallable, Category="Facing")
-    void VisualFaceActor(AActor* Target);
 
     UFUNCTION(BlueprintCallable, Category="Facing")
     void VisualFaceYaw(float WorldYaw);
 
     UPROPERTY(EditDefaultsOnly, Category="VFX|Audio")
-    class UNiagaraSystem* FX_Muzzle = nullptr;
+    UNiagaraSystem* FX_Muzzle = nullptr;
 
     UPROPERTY(EditDefaultsOnly, Category="VFX|Audio")
-    class UNiagaraSystem* FX_Impact = nullptr;
+    UNiagaraSystem* FX_Impact = nullptr;
 
     UPROPERTY(EditDefaultsOnly, Category="VFX|Audio")
-    class USoundBase* Snd_Muzzle = nullptr;
+    USoundBase* Snd_Muzzle = nullptr;
 
     UPROPERTY(EditDefaultsOnly, Category="VFX|Audio")
-    class USoundBase* Snd_Impact = nullptr;
+    USoundBase* Snd_Impact = nullptr;
 
     UPROPERTY(EditDefaultsOnly, Category="VFX|Audio")
-    class USoundAttenuation* SndAttenuation = nullptr;
+    USoundAttenuation* SndAttenuation = nullptr;
 
     UPROPERTY(EditDefaultsOnly, Category="VFX|Audio")
-    class USoundConcurrency* SndConcurrency = nullptr;
+    USoundConcurrency* SndConcurrency = nullptr;
 
     UPROPERTY(EditAnywhere, Category="VFX|Audio", meta=(ClampMin="0.0"))
     float ImpactDelaySeconds = 1.0f;
@@ -282,6 +309,7 @@ protected:
     
 
 private:
+    UPROPERTY()
     TArray<UMaterialInstanceDynamic*> HighlightMIDs;
     
     void ApplyOutlineToAllModels(UMaterialInterface* Mat);

@@ -141,29 +141,26 @@ void UTurnContextWidget::Refresh()
 
 void UTurnContextWidget::UpdateActionPoints()
 {
-    if (!APText)
-        return;
+    if (!APText) return;
 
     AMatchPlayerController* P = MPC();
     AUnitBase* Sel = P ? P->SelectedUnit : nullptr;
-    if (!Sel)
-    {
-        APText->SetText(FText::GetEmpty());
-        return;
-    }
+    if (!Sel) { APText->SetText(FText::GetEmpty()); return; }
 
-    if (UActorComponent* C = Sel->GetComponentByClass(UUnitActionResourceComponent::StaticClass()))
+    const auto* APComp = Sel->FindComponentByClass<UUnitActionResourceComponent>();
+    if (!APComp) { APText->SetText(FText::GetEmpty()); return; }
+
+    const int32 Debt = Sel->NextPhaseAPDebt;     // replicated on unit
+    if (Debt > 0)
     {
-        const auto* APComp = Cast<UUnitActionResourceComponent>(C);
-        if (APComp)
-        {
-            APText->SetText(FText::FromString(
-                FString::Printf(TEXT("AP: %d / %d"), APComp->CurrentAP, APComp->MaxAP)));
-        }
+        APText->SetText(FText::FromString(
+            FString::Printf(TEXT("AP: %d / %d   (−%d next phase)"),
+                APComp->CurrentAP, APComp->MaxAP, Debt)));
     }
     else
     {
-        APText->SetText(FText::GetEmpty());
+        APText->SetText(FText::FromString(
+            FString::Printf(TEXT("AP: %d / %d"), APComp->CurrentAP, APComp->MaxAP)));
     }
 }
 
@@ -202,24 +199,36 @@ void UTurnContextWidget::RebuildActionButtons(AUnitBase* Sel)
 
     for (UUnitAction* Act : Sel->GetActions())
     {
-        if (!Act) continue;
-        if (Act->Desc.Phase != Ph) continue; // only actions for current phase
+        const bool bAssault = UWeaponKeywordHelpers::HasKeyword(Sel->GetActiveWeaponProfile(), EWeaponKeyword::Assault);
+        const bool bShowAssaultNote = (Act->Desc.ActionId == TEXT("Shoot") && bAssault);
+        
+        if (!Act || Act->Desc.Phase != Ph) continue;
 
-        // Build preview args. Only stamp InstigatorPC when it's actually our turn;
-        // this controls CanExecute() for actions that require a PC (e.g., Advance/Shoot).
         FActionRuntimeArgs PreviewArgs;
-        PreviewArgs.InstigatorPC = bTurn ? PC : nullptr;
-
+        PreviewArgs.InstigatorPC = PC;
         if (S->Preview.Attacker == Sel && S->Preview.Target)
             PreviewArgs.TargetUnit = S->Preview.Target;
 
-        // Enable only if it's our turn; server will still enforce AP/phase.
-        const bool bCan = bTurn ? Act->CanExecute(Sel, PreviewArgs) : false;
+        const bool bCan = Act->CanExecute(Sel, PreviewArgs);
 
         UActionButtonWidget* Row = CreateWidget<UActionButtonWidget>(GetOwningPlayer(), RowClass);
         if (!Row) continue;
 
-        Row->Init(Act, Act->Desc.DisplayName, bCan);
+        FString Suffix;
+        if (Act->Desc.NextPhaseAPCost > 0)
+        {
+            Suffix = FString::Printf(TEXT(" (−%d next phase)"), Act->Desc.NextPhaseAPCost);
+        }
+
+        const FText CostText = bShowAssaultNote
+        ? FText::Format(NSLOCTEXT("Actions","ActionWithCostAssault","{0}: {1} AP"),
+                        Act->Desc.DisplayName, FText::AsNumber(Act->Desc.Cost))
+        : (Act->Desc.Cost > 0
+            ? FText::Format(NSLOCTEXT("Actions","ActionWithCost","{0}: {1} AP"),
+                            Act->Desc.DisplayName, FText::AsNumber(Act->Desc.Cost))
+            : FText::Format(NSLOCTEXT("Actions","ActionFree","{0}: Free"), Act->Desc.DisplayName));
+
+        Row->Init(Act, CostText, bCan);
         Row->OnActionClicked.AddDynamic(this, &UTurnContextWidget::HandleDynamicActionClicked);
         ActionsPanel->AddChild(Row);
     }
@@ -261,6 +270,7 @@ void UTurnContextWidget::HandleDynamicActionClicked(UUnitAction* Act)
     // Instant actions
     FActionRuntimeArgs Args;
     PC->Server_ExecuteAction(PC->SelectedUnit, Act->Desc.ActionId, Args);
+    Refresh();
 }
 
 // ---------------- UI fills & math (unchanged from your version) ----------------

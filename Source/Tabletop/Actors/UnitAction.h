@@ -23,11 +23,16 @@ struct FActionDescriptor
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) FText DisplayName;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) int32 Cost = 1;         // AP cost
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) ETurnPhase Phase = ETurnPhase::Move;
+	
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) int32 UsesPerTurn = 0;  // 0 = unlimited
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) int32 UsesPerPhase = 0; // 0 = unlimited
+	UPROPERTY(EditAnywhere, BlueprintReadOnly) int32 UsesPerMatch = 0;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) bool bRequiresGroundClick = false;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) bool bRequiresEnemyTarget = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly)
+	int32 NextPhaseAPCost = 0; 
 };
 
 USTRUCT(BlueprintType)
@@ -73,7 +78,7 @@ public:
 	{
 		Desc.ActionId = TEXT("Move");
 		Desc.DisplayName = FText::FromString(TEXT("Move"));
-		Desc.Cost = 2; Desc.Phase = ETurnPhase::Move;
+		Desc.Cost = 1; Desc.Phase = ETurnPhase::Move;
 		Desc.bRequiresGroundClick = true;
 		//Desc.UsesPerTurn = 1; - Non functional yet
 	}
@@ -91,6 +96,7 @@ public:
 		Desc.ActionId = TEXT("Advance");
 		Desc.DisplayName = FText::FromString(TEXT("Advance"));
 		Desc.Cost = 1; Desc.Phase = ETurnPhase::Move;
+		Desc.NextPhaseAPCost = 1;
 	}
 	virtual bool CanExecute_Implementation(AUnitBase* Unit, const FActionRuntimeArgs& Args) const override;
 	virtual void Execute_Implementation(AUnitBase* Unit, const FActionRuntimeArgs& Args) override;

@@ -11,13 +11,14 @@
 #include "UnitAction.h"
 #include "Kismet/GameplayStatics.h"
 #include "Tabletop/UnitActionResourceComponent.h"
+#include "Tabletop/Gamemodes/MatchGameMode.h"
 #include "Tabletop/PlayerStates/TabletopPlayerState.h"
 
 
 AUnitBase::AUnitBase()
 {
     bReplicates = true;
-    SetReplicateMovement(true);
+    AActor::SetReplicateMovement(true);
 
     USceneComponent* Root = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
     RootComponent = Root;
@@ -126,6 +127,84 @@ void AUnitBase::Server_InitFromRow(APlayerState* OwnerPS, const FUnitRow& Row, i
 void AUnitBase::OnRep_AbilityClasses()
 {
     EnsureRuntimeBuilt();
+}
+
+void AUnitBase::OnRep_ActionUsage()
+{
+    ActionUsageRuntime.Empty(ActionUsageRep.Num());
+    for (const FActionUsageEntry& E : ActionUsageRep)
+        ActionUsageRuntime.Add(E.ActionId, E);
+
+    if (UWorld* W = GetWorld())
+        if (AMatchGameState* S = W->GetGameState<AMatchGameState>())
+            S->OnDeploymentChanged.Broadcast();
+
+    EnsureRuntimeBuilt();
+}
+
+bool AUnitBase::CanUseActionNow(const FActionDescriptor& D) const
+{
+    if (const FActionUsageEntry* E = ActionUsageRuntime.Find(D.ActionId))
+    {
+        if (D.UsesPerPhase > 0 && E->PerPhase >= D.UsesPerPhase) return false;
+        if (D.UsesPerTurn  > 0 && E->PerTurn  >= D.UsesPerTurn)  return false;
+        if (D.UsesPerMatch > 0 && E->PerMatch >= D.UsesPerMatch) return false;
+    }
+    return true;
+}
+
+FActionUsageEntry* AUnitBase::FindOrAddUsage(AUnitBase* U, const FName Id)
+{
+    // runtime cache
+    FActionUsageEntry* InMem = U->ActionUsageRuntime.Find(Id);
+    if (!InMem)
+    {
+        FActionUsageEntry NewE; NewE.ActionId = Id;
+        U->ActionUsageRuntime.Add(Id, NewE);
+        InMem = U->ActionUsageRuntime.Find(Id);
+    }
+
+    // replicated array mirror
+    FActionUsageEntry* Rep = nullptr;
+    for (FActionUsageEntry& E : U->ActionUsageRep)
+        if (E.ActionId == Id) { Rep = &E; break; }
+    if (!Rep)
+    {
+        U->ActionUsageRep.Add({Id, 0, 0, 0});
+        Rep = &U->ActionUsageRep.Last();
+    }
+    // Keep addresses separate; return the runtime one for convenience
+    return InMem;
+}
+
+void AUnitBase::ResetUsageForPhase()
+{
+    if (!HasAuthority()) return;
+    for (auto& KV : ActionUsageRuntime)   KV.Value.PerPhase = 0;
+    for (auto& E  : ActionUsageRep)       E.PerPhase = 0;
+    ForceNetUpdate();
+}
+
+void AUnitBase::ResetUsageForTurn()
+{
+    if (!HasAuthority()) return;
+    for (auto& KV : ActionUsageRuntime)   KV.Value.PerTurn = 0;
+    for (auto& E  : ActionUsageRep)       E.PerTurn = 0;
+    ForceNetUpdate();
+}
+
+void AUnitBase::BumpUsage(const FActionDescriptor& D)
+{
+    if (!HasAuthority()) return;
+    // runtime + rep array stay in sync
+    FActionUsageEntry* Runtime = FindOrAddUsage(this, D.ActionId);
+    Runtime->PerPhase++; Runtime->PerTurn++; Runtime->PerMatch++;
+
+    // mirror into the replicated entry
+    for (FActionUsageEntry& E : ActionUsageRep)
+        if (E.ActionId == D.ActionId) { E = *Runtime; break; }
+
+    ForceNetUpdate();
 }
 
 void AUnitBase::EnsureRuntimeBuilt()
@@ -601,17 +680,6 @@ void AUnitBase::VisualFaceYaw(float WorldYaw)
     }
 }
 
-void AUnitBase::VisualFaceActor(AActor* Target)
-{
-    if (!Target) return;
-    FVector Dir = Target->GetActorLocation() - GetActorLocation();
-    Dir.Z = 0.f;
-    if (Dir.IsNearlyZero()) return;
-
-    const float Yaw = Dir.Rotation().Yaw;
-    VisualFaceYaw(Yaw);
-}
-
 AActor* AUnitBase::FindNearestEnemyUnit(float MaxSearchDistCm) const
 {
     AUnitBase* Best = nullptr;
@@ -713,4 +781,5 @@ void AUnitBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetim
     DOREPLIFETIME(AUnitBase, FeelNoPainRep);
 
     DOREPLIFETIME(AUnitBase, AbilityClassesRep);
+    DOREPLIFETIME(AUnitBase, NextPhaseAPDebt);
 }

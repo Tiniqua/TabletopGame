@@ -29,15 +29,6 @@
 
 namespace
 {
-    FORCEINLINE float CmToInches(float Cm) { return Cm / 2.54f; }
-    FORCEINLINE float DistInches(const FVector& A, const FVector& B) { return FVector::Dist(A, B) / 2.54f; }
-
-    // When moving into melee, keep a little gap to avoid direct overlap. Tweak to your base size.
-    constexpr float BaseToBaseGapCm = 50.f; // ~19.7 inches if using big base; adjust as needed
-}
-
-namespace
-{
     FORCEINLINE int32 D6() { return FMath::RandRange(1, 6); }
 
     // 40k to-wound threshold from S vs T
@@ -65,29 +56,6 @@ static UAbilityEventSubsystem* AbilityBus(UWorld* W)
     if (!W) return nullptr;
     if (UGameInstance* GI = W->GetGameInstance())
         return GI->GetSubsystem<UAbilityEventSubsystem>();
-    return nullptr;
-}
-
-static APlayerState* ResolveControllerPS(const AMatchGameState* S, const APlayerController* PC)
-{
-    if (!S || !PC) return nullptr;
-
-    APlayerState* PS = PC->PlayerState;
-    if (!PS) return nullptr;
-
-    // 1) Direct pointer match (fast path, preferred)
-    if (PS == S->P1) return S->P1;
-    if (PS == S->P2) return S->P2;
-
-    // 2) Fallback: TeamNum mapping (helps after seamless travel / swaps)
-    const ATabletopPlayerState* TPS  = Cast<ATabletopPlayerState>(PS);
-    const ATabletopPlayerState* TP1  = S->P1 ? Cast<ATabletopPlayerState>(S->P1) : nullptr;
-    const ATabletopPlayerState* TP2  = S->P2 ? Cast<ATabletopPlayerState>(S->P2) : nullptr;
-
-    if (TPS && TP1 && TPS->TeamNum > 0 && TPS->TeamNum == TP1->TeamNum) return S->P1;
-    if (TPS && TP2 && TPS->TeamNum > 0 && TPS->TeamNum == TP2->TeamNum) return S->P2;
-
-    // 3) Couldn’t resolve — returns nullptr so callers can early-out safely.
     return nullptr;
 }
 
@@ -1621,13 +1589,36 @@ void AMatchGameMode::TallyObjectives_EndOfRound()
 void AMatchGameMode::ResetAPForTurnOwner(UWorld* W, APlayerState* TurnOwner, EActionPoolScope Scope)
 {
     if (!W || !TurnOwner) return;
+
     for (TActorIterator<AUnitBase> It(W); It; ++It)
     {
-        AUnitBase* U = *It; if (!U || U->OwningPS != TurnOwner) continue;
+        AUnitBase* U = *It;
+        if (!U || U->OwningPS != TurnOwner) continue;
+
         if (auto* AP = U->FindComponentByClass<UUnitActionResourceComponent>())
         {
+            // 1) Reset the AP pool for this phase/turn
             if (Scope == EActionPoolScope::PerTurn) AP->ResetForTurn();
-            else AP->ResetForPhase(); // if you keep per-phase by default
+            else AP->ResetForPhase();
+
+            // 2) Apply any deferred debt
+            if (U->NextPhaseAPDebt > 0)
+            {
+                const int32 Applied = FMath::Min(AP->CurrentAP, U->NextPhaseAPDebt);
+                AP->CurrentAP       = AP->CurrentAP - Applied;
+                U->NextPhaseAPDebt  = U->NextPhaseAPDebt - Applied;
+
+#if !(UE_BUILD_SHIPPING)
+                if (GEngine)
+                {
+                    GEngine->AddOnScreenDebugMessage(
+                        -1, 2.f, FColor::Cyan,
+                        FString::Printf(TEXT("[Debt] Applied %d AP debt to %s (AP=%d/%d, RemainderDebt=%d)"),
+                            Applied, *U->GetName(), AP->CurrentAP, AP->MaxAP, U->NextPhaseAPDebt));
+                }
+#endif
+            }
+
             U->ForceNetUpdate();
         }
     }

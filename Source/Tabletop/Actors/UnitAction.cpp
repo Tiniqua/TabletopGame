@@ -3,6 +3,7 @@
 
 #include "UnitBase.h"
 #include "Tabletop/UnitActionResourceComponent.h"
+#include "Tabletop/WeaponKeywordHelpers.h"
 #include "Tabletop/Gamemodes/MatchGameMode.h"
 
 bool UUnitAction::CanExecute_Implementation(AUnitBase* Unit, const FActionRuntimeArgs& /*Args*/) const
@@ -11,11 +12,10 @@ bool UUnitAction::CanExecute_Implementation(AUnitBase* Unit, const FActionRuntim
 	const AMatchGameState* GS = Unit->GetWorld() ? Unit->GetWorld()->GetGameState<AMatchGameState>() : nullptr;
 	if (!GS || GS->TurnPhase != Desc.Phase) return false;
 
-	const UUnitActionResourceComponent* AP = Unit->FindComponentByClass<UUnitActionResourceComponent>();
-	// If the component isn't present or hasn't replicated yet, don't block UI.
-	if (!AP) return true;
+	if (!Unit->CanUseActionNow(Desc)) return false;
 
-	return AP->CanPay(Desc.Cost);
+	const auto* AP = Unit->FindComponentByClass<UUnitActionResourceComponent>();
+	return AP && AP->CanPay(Desc.Cost);
 }
 
 bool UUnitAction::PayAP(AUnitBase* Unit) const
@@ -37,22 +37,36 @@ void UUnitAction::Execute_Implementation(AUnitBase* /*Unit*/, const FActionRunti
 
 bool UAction_Move::CanExecute_Implementation(AUnitBase* Unit, const FActionRuntimeArgs& Args) const
 {
-	if (!Super::CanExecute_Implementation(Unit, Args)) return false;
+	//if (!Super::CanExecute_Implementation(Unit, Args)) return false; // we dont need to check Super since we handle unique cases in here that circumvent standard super flow
 	if (!Unit || Unit->ModelsCurrent <= 0) return false;
-	if (Unit->MoveMaxInches <= 0.f) return false;
-	return true;
-}
 
+	// must have *some* budget to move at all
+	if (Unit->MoveBudgetInches <= 0.f) return false;
+	
+	if(Unit->bAdvancedThisTurn)
+	{
+		return true; // if we have advanced ignore Action Point check
+	}
+	
+	const UUnitActionResourceComponent* AP = Unit->FindComponentByClass<UUnitActionResourceComponent>();
+	const bool bCanPayAP   = (AP && AP->CanPay(Desc.Cost));
+	return bCanPayAP;
+}
 
 void UAction_Move::Execute_Implementation(AUnitBase* Unit, const FActionRuntimeArgs& Args)
 {
 	if (!Unit || !Args.InstigatorPC) return;
-	if (!PayAP(Unit)) return;
+
+	if(!Unit->bAdvancedThisTurn)
+	{
+		if (!PayAP(Unit)) return;
+	}
+
+	if (Unit->HasAuthority())
+		Unit->BumpUsage(Desc);
 
 	if (AMatchGameMode* GM = Unit->GetWorld()->GetAuthGameMode<AMatchGameMode>())
-	{
 		GM->Handle_MoveUnit(Args.InstigatorPC, Unit, Args.TargetLocation);
-	}
 }
 
 // -------------- ADVANCE ACTION -----------------
@@ -70,6 +84,12 @@ void UAction_Advance::Execute_Implementation(AUnitBase* Unit, const FActionRunti
 	if (!Unit || !Args.InstigatorPC) return;
 	if (!PayAP(Unit)) return;
 
+	if (Unit->HasAuthority() && Desc.NextPhaseAPCost > 0)
+	{
+		Unit->NextPhaseAPDebt = FMath::Clamp(Unit->NextPhaseAPDebt + Desc.NextPhaseAPCost, 0, 255);
+		Unit->ForceNetUpdate();
+	}
+	
 	if (AMatchGameMode* GM = Unit->GetWorld()->GetAuthGameMode<AMatchGameMode>())
 	{
 		GM->Handle_AdvanceUnit(Args.InstigatorPC, Unit);
@@ -80,22 +100,56 @@ void UAction_Advance::Execute_Implementation(AUnitBase* Unit, const FActionRunti
 
 bool UAction_Shoot::CanExecute_Implementation(AUnitBase* Unit, const FActionRuntimeArgs& Args) const
 {
-	if (!Super::CanExecute_Implementation(Unit, Args)) return false;
+	// Manual common checks (don't call Super because it enforces AP strictly)
+	if (!Unit) return false;
+
+	const AMatchGameState* GS =
+		Unit->GetWorld() ? Unit->GetWorld()->GetGameState<AMatchGameState>() : nullptr;
+	if (!GS || GS->TurnPhase != Desc.Phase) return false;
+
+	// Uses-per-Phase/Turn/Match gates
+	if (!Unit->CanUseActionNow(Desc)) return false;
+
+	// Per-action checks
 	if (!Args.InstigatorPC) return false;
-	if (Unit->bHasShot) return false;
-	// TargetUnit is OPTIONAL for enabling the button.
-	// If present, you can also validate it here (range/LOS), but don’t require it.
-	return true;
+	if (Unit->bHasShot)     return false;
+
+	// AP path OR Assault+Advanced free path
+	const bool bHasAssault = UWeaponKeywordHelpers::HasKeyword(Unit->GetActiveWeaponProfile(), EWeaponKeyword::Assault);
+	if (bHasAssault && Unit->bAdvancedThisTurn)
+	{
+		// Allowed even if no AP
+		return true;
+	}
+
+	// Otherwise require enough AP
+	const UUnitActionResourceComponent* AP = Unit->FindComponentByClass<UUnitActionResourceComponent>();
+	return (AP && AP->CanPay(Desc.Cost));
 }
 
 void UAction_Shoot::Execute_Implementation(AUnitBase* Unit, const FActionRuntimeArgs& Args)
 {
 	if (!Unit || !Args.InstigatorPC) return;
-	if (!PayAP(Unit)) return;
 
-	// Require target **here** (or your handler enters target mode if absent).
+	const bool bHasAssault = UWeaponKeywordHelpers::HasKeyword(Unit->GetActiveWeaponProfile(), EWeaponKeyword::Assault);
+	const bool bFreeThisShot = (bHasAssault && Unit->bAdvancedThisTurn);
+
+	// Only pay AP if not free-by-Assault
+	if (!bFreeThisShot)
+	{
+		if (!PayAP(Unit)) return; // server-side charge; fails safely if short
+	}
+
+	// Require target here (or enter target mode elsewhere)
 	if (!Args.TargetUnit) return;
 
+	// Bump usage counters on the server
+	if (Unit->HasAuthority())
+	{
+		Unit->BumpUsage(Desc);
+	}
+
+	// Hand off to authoritative resolution
 	if (AMatchGameMode* GM = Unit->GetWorld()->GetAuthGameMode<AMatchGameMode>())
 	{
 		GM->Handle_ConfirmShoot(Args.InstigatorPC, Unit, Args.TargetUnit);

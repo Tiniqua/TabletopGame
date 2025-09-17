@@ -3,7 +3,6 @@
 
 
 #include "EngineUtils.h"
-#include "Components/Button.h"
 #include "Components/TextBlock.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -252,14 +251,11 @@ void AMatchPlayerController::Server_ExitToMainMenu_Implementation()
 
 void AMatchPlayerController::Client_OnUnitMoved_Implementation(AUnitBase* Unit, float SpentTTIn, float NewBudgetTTIn)
 {
-	// Only clear if we were actually selecting that unit (safe guard)
 	if (SelectedUnit == Unit)
 	{
-		// Prefer your existing helper so it broadcasts OnSelectedChanged etc.
 		SelectUnit(nullptr);
 	}
-
-	// Just in case we were in any special mode
+	
 	ExitTargetMode();
 
 #if !(UE_BUILD_SHIPPING)
@@ -303,7 +299,7 @@ void AMatchPlayerController::Server_RequestAdvance_Implementation(AUnitBase* Uni
 
 void AMatchPlayerController::Client_OnAdvanced_Implementation(AUnitBase* Unit, int32 BonusInches)
 {
-	// Update UI label nicely
+	
 	if (UTurnContextWidget* W = /* however you obtain your HUD widget */ nullptr)
 	{
 		// if (W->AdvanceLabel)
@@ -529,11 +525,11 @@ void AMatchPlayerController::Server_UnStuck_Implementation()
 
 bool AMatchPlayerController::TeleportPawnToFirstPlayerStart()
 {
-	UWorld* World = GetWorld();
+	const UWorld* World = GetWorld();
 	if (!World) return false;
 
 	// Find the first PlayerStart in the world
-	APlayerStart* PlayerStart = nullptr;
+	const APlayerStart* PlayerStart = nullptr;
 	for (TActorIterator<APlayerStart> It(World); It; ++It)
 	{
 		PlayerStart = *It;
