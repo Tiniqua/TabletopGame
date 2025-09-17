@@ -117,3 +117,26 @@ public:
 	virtual bool CanExecute_Implementation(AUnitBase* Unit, const FActionRuntimeArgs& Args) const override;
 	virtual void Execute_Implementation(AUnitBase* Unit, const FActionRuntimeArgs& Args) override;
 };
+
+UCLASS()
+class TABLETOP_API UAction_Overwatch : public UUnitAction
+{
+	GENERATED_BODY()
+public:
+	UAction_Overwatch()
+	{
+		Desc.ActionId   = TEXT("Overwatch");
+		Desc.DisplayName= FText::FromString(TEXT("Overwatch"));
+		Desc.Cost       = 2;
+		Desc.Phase      = ETurnPhase::Shoot;
+	}
+
+	virtual void Setup(AUnitBase* Unit) override;
+	virtual bool CanExecute_Implementation(AUnitBase* Unit, const FActionRuntimeArgs& Args) const override;
+	virtual void Execute_Implementation(AUnitBase* Unit, const FActionRuntimeArgs& Args) override;
+
+private:
+	UFUNCTION() void OnAnyEvent(const struct FAbilityEventContext& Ctx);
+
+	TWeakObjectPtr<AUnitBase> OwnerUnit;
+};

@@ -66,6 +66,7 @@ void AUnitBase::Server_InitFromRow(APlayerState* OwnerPS, const FUnitRow& Row, i
     ToughnessRep = Row.Toughness;
     WoundsRep    = Row.Wounds;
     SaveRep      = Row.Save;
+    bOverwatchArmed = false;
 
     InvulnerableSaveRep = FMath::Clamp(Row.InvulnSave, 2, 7);
     FeelNoPainRep       = FMath::Clamp(Row.FeelNoPain, 2, 7);
@@ -90,6 +91,7 @@ void AUnitBase::Server_InitFromRow(APlayerState* OwnerPS, const FUnitRow& Row, i
     RuntimeActions.Add(NewObject<UAction_Move>(this));
     RuntimeActions.Add(NewObject<UAction_Advance>(this));
     RuntimeActions.Add(NewObject<UAction_Shoot>(this));
+    RuntimeActions.Add(NewObject<UAction_Overwatch>(this));
     
     for (UUnitAction* A : RuntimeActions) if (A) A->Setup(this);
 
@@ -856,4 +858,5 @@ void AUnitBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetim
 
     DOREPLIFETIME(AUnitBase, AbilityClassesRep);
     DOREPLIFETIME(AUnitBase, NextPhaseAPDebt);
+    DOREPLIFETIME(AUnitBase, bOverwatchArmed);
 }

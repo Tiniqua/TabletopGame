@@ -539,6 +539,18 @@ void AMatchGameMode::Handle_MoveUnit(AMatchPlayerController* PC, AUnitBase* Unit
     Unit->MoveBudgetInches = FMath::Max(0.f, Unit->MoveBudgetInches - spentTTIn);
     Unit->bMovedThisTurn = true;      // NEW: track moved for Heavy/Assault logic
     Unit->SetActorLocation(finalDest);
+
+    if (UAbilityEventSubsystem* Bus = AbilityBus(GetWorld()))
+    {
+        FAbilityEventContext Ctx;
+        Ctx.Event    = ECombatEvent::Unit_Moved;
+        Ctx.GM       = this;
+        Ctx.GS       = S;
+        Ctx.Source   = Unit;
+        Ctx.WorldPos = finalDest;
+        Bus->Broadcast(Ctx);
+    }
+    
     NotifyUnitTransformChanged(Unit);
     Unit->ForceNetUpdate();
 
@@ -633,6 +645,313 @@ void AMatchGameMode::Handle_SelectTarget(AMatchPlayerController* PC, AUnitBase* 
     S->ForceNetUpdate();
 }
 
+FShotResolveResult AMatchGameMode::ResolveRangedAttack_Internal(
+	AUnitBase* Attacker, AUnitBase* Target, const TCHAR* DebugPrefix)
+{
+	FShotResolveResult Out;
+	if (!HasAuthority() || !Attacker || !Target) return Out;
+	if (Attacker->ModelsCurrent <= 0 || Target->ModelsCurrent <= 0) return Out;
+
+	// Use the currently-equipped weapon
+	const FWeaponProfile& Weapon = Attacker->GetActiveWeaponProfile();
+
+	// ---- build context ----
+	FAttackContext Ctx;
+	Ctx.Attacker          = Attacker;
+	Ctx.Target            = Target;
+	Ctx.Weapon            = &Weapon; // pointer valid here
+	Ctx.RangeInches       = FVector::Dist(Attacker->GetActorLocation(), Target->GetActorLocation()) / CmPerTabletopInch();
+	Ctx.bAttackerMoved    = Attacker->bMovedThisTurn;
+	Ctx.bAttackerAdvanced = Attacker->bAdvancedThisTurn;
+
+	// base numbers
+	const int32 Models = FMath::Max(0, Attacker->ModelsCurrent);
+	Ctx.Attacks   = FMath::Max(0, Weapon.Attacks) * Models;
+	Ctx.HitNeed   = FMath::Clamp(Weapon.SkillToHit, 2, 6);
+	Ctx.WoundNeed = ToWoundTarget(Weapon.Strength, Target->GetToughness());
+	Ctx.AP        = FMath::Max(0, Weapon.AP);
+	Ctx.Damage    = FMath::Max(1, Weapon.Damage);
+
+	// ---- Movement-gated weapon rules ----
+	const bool bHasHeavy   = UWeaponKeywordHelpers::HasKeyword(Weapon, EWeaponKeyword::Heavy);
+	const bool bHasAssault = UWeaponKeywordHelpers::HasKeyword(Weapon, EWeaponKeyword::Assault);
+	const FWeaponKeywordData* RF = UWeaponKeywordHelpers::FindKeyword(Weapon, EWeaponKeyword::RapidFire);
+
+	// Assault: allow shooting after Advance; if not Assault and advanced, disallow
+	if (Ctx.bAttackerAdvanced && !bHasAssault)
+	{
+		if (AMatchGameState* S2 = GS())
+			S2->Multicast_ScreenMsg(
+				FString::Printf(TEXT("%s Cannot shoot after Advancing (weapon is not Assault)."),
+				DebugPrefix ? DebugPrefix : TEXT("[Shot]")),
+				FColor::Red, 3.f);
+		return Out;
+	}
+
+	// Heavy: +1 to hit if did not move
+	if (bHasHeavy && !Ctx.bAttackerMoved)
+	{
+		Ctx.HitNeed = FMath::Clamp(Ctx.HitNeed - 1, 2, 6);
+	}
+
+	// Rapid Fire X: +X attacks per model at half-range or less
+	if (RF && RF->Value > 0)
+	{
+		const bool bHalfRange = (Ctx.RangeInches <= (float(Weapon.RangeInches) * 0.5f + KINDA_SMALL_NUMBER));
+		if (bHalfRange)
+		{
+			Ctx.Attacks += RF->Value * FMath::Max(0, Attacker->ModelsCurrent);
+		}
+	}
+
+	// Cover baseline (keywords/mods can override some effects like Ignores Cover)
+	int32 HitMod = 0, SaveMod = 0;
+	ECoverType Cover = ECoverType::None;
+	QueryCover(Attacker, Target, HitMod, SaveMod, Cover);
+
+	// ===== Stage: PreHitCalc =====
+	{
+		FStageResult K = FKeywordProcessor::BuildForStage(Ctx, ECombatEvent::PreHitCalc);
+		FRollModifiers AMods = Attacker->CollectStageMods(ECombatEvent::PreHitCalc, /*bAsAttacker*/true, Target);
+		FRollModifiers TMods = Target  ->CollectStageMods(ECombatEvent::PreHitCalc, /*bAsAttacker*/false, Attacker);
+		FRollModifiers M = K.ModsNow; M.Accumulate(AMods); M.Accumulate(TMods);
+
+		Ctx.Attacks += M.AttacksDelta;
+		Ctx.HitNeed  = FMath::Clamp(Ctx.HitNeed + M.HitNeedOffset, 2, 6);
+		const bool bAutoHit = M.bAutoHit;
+
+		Attacker->ConsumeForStage(ECombatEvent::PreHitCalc, true);
+		Target  ->ConsumeForStage(ECombatEvent::PreHitCalc, false);
+
+		// Apply cover hit mod AFTER keyword offsets (not affected by IgnoresCover)
+		Ctx.HitNeed = FMath::Clamp(Ctx.HitNeed + (HitMod * -1), 2, 6);
+
+		// Roll hits
+		if (bAutoHit)
+		{
+			Ctx.Hits = Ctx.Attacks;
+		}
+		else
+		{
+			for (int32 i=0; i<Ctx.Attacks; ++i)
+			{
+				const int32 r = D6();
+				if (r >= Ctx.HitNeed) ++Ctx.Hits;
+				Ctx.HitRolls.Add((uint8)r);
+			}
+		}
+
+		// PostHitRolls (Sustained Hits, Lethal Hits)
+		if (Ctx.Weapon)
+		{
+			if (const FWeaponKeywordData* SH =
+					UWeaponKeywordHelpers::FindKeyword(*Ctx.Weapon, EWeaponKeyword::SustainedHits))
+			{
+				int32 Extra = 0;
+				for (uint8 r : Ctx.HitRolls)
+				{
+					if (r >= Ctx.CritHitThreshold)
+					{
+						Extra += FMath::Max(0, SH->Value);
+					}
+				}
+				Ctx.Hits += Extra;
+			}
+
+			if (UWeaponKeywordHelpers::HasKeyword(*Ctx.Weapon, EWeaponKeyword::LethalHits))
+			{
+				int32 AutoWounds = 0;
+				for (uint8 r : Ctx.HitRolls)
+				{
+					if (r >= Ctx.CritHitThreshold)
+					{
+						++AutoWounds;
+					}
+				}
+				Ctx.Wounds += AutoWounds;
+			}
+		}
+	}
+
+	// ===== Stage: PreWoundCalc =====
+	{
+		FStageResult K = FKeywordProcessor::BuildForStage(Ctx, ECombatEvent::PreWoundCalc);
+		FRollModifiers AMods = Attacker->CollectStageMods(ECombatEvent::PreWoundCalc, true, Target);
+		FRollModifiers TMods = Target  ->CollectStageMods(ECombatEvent::PreWoundCalc, false, Attacker);
+		FRollModifiers M = K.ModsNow; M.Accumulate(AMods); M.Accumulate(TMods);
+
+		Ctx.WoundNeed = FMath::Clamp(Ctx.WoundNeed + M.WoundNeedOffset, 2, 6);
+
+		Attacker->ConsumeForStage(ECombatEvent::PreWoundCalc, true);
+		Target  ->ConsumeForStage(ECombatEvent::PreWoundCalc, false);
+
+		const int32 HitsNeedingWound = FMath::Max(0, Ctx.Hits - Ctx.Wounds); // subtract auto-wounds
+		int32 NewWounds = 0;
+		for (int32 i=0; i<HitsNeedingWound; ++i)
+		{
+			const int32 r = D6();
+			if (r >= Ctx.WoundNeed) ++NewWounds;
+			Ctx.WoundRolls.Add((uint8)r);
+		}
+		Ctx.Wounds += NewWounds;
+
+		// Devastating Wounds -> no-save crits
+		if (Ctx.Weapon && UWeaponKeywordHelpers::HasKeyword(*Ctx.Weapon, EWeaponKeyword::DevastatingWounds))
+		{
+			int32 Crits = 0;
+			for (uint8 r : Ctx.WoundRolls) if (r >= Ctx.CritWoundThreshold) ++Crits;
+			Ctx.CritWounds_NoSave += Crits;
+		}
+	}
+
+	// ===== Stage: PreSavingThrows =====
+	bool bIgnoreCover = false;
+	{
+		FStageResult K = FKeywordProcessor::BuildForStage(Ctx, ECombatEvent::PreSavingThrows);
+		FRollModifiers AMods = Attacker->CollectStageMods(ECombatEvent::PreSavingThrows, true, Target);
+		FRollModifiers TMods = Target  ->CollectStageMods(ECombatEvent::PreSavingThrows, false, Attacker);
+		FRollModifiers M = K.ModsNow; M.Accumulate(AMods); M.Accumulate(TMods);
+
+		Ctx.AP     += M.APDelta;
+		Ctx.Damage += M.DamageDelta;
+		bIgnoreCover = M.bIgnoreCover;
+
+		Attacker->ConsumeForStage(ECombatEvent::PreSavingThrows, true);
+		Target  ->ConsumeForStage(ECombatEvent::PreSavingThrows, false);
+	}
+
+	const int32 SaveBase = Target->GetSave();
+
+	// 1) Apply AP to armour
+	int32 ArmourNeed = ModifiedSaveNeed(SaveBase, Ctx.AP);
+
+	// 2) Apply cover to *armour* only
+	if (bIgnoreCover) { SaveMod = 0; }
+	ArmourNeed = FMath::Clamp(ArmourNeed - SaveMod, 2, 7);
+
+	// 3) Cap by invulnerable
+	const int32 InvTN = Target->GetInvuln();
+	int32 SaveNeed = (InvTN >= 2 && InvTN <= 6) ? FMath::Min(ArmourNeed, InvTN) : ArmourNeed;
+
+	const bool bHasSave = (SaveNeed <= 6);
+
+	// Split normal vs no-save crit wounds
+	const int32 NormalWounds = FMath::Max(0, Ctx.Wounds - Ctx.CritWounds_NoSave);
+
+	int32 Unsaved = 0;
+	if (bHasSave)
+	{
+		for (int i=0; i<NormalWounds; ++i)
+			if (D6() < SaveNeed) ++Unsaved; // fail = unsaved
+	}
+	else
+	{
+		Unsaved = NormalWounds;
+	}
+
+	// Add crit-no-save wounds directly
+	Unsaved += Ctx.CritWounds_NoSave;
+
+	const int32 totalDamage = Unsaved * Ctx.Damage;
+
+	// mark shooter as having shot
+	Attacker->bHasShot = true;
+	Attacker->ForceNetUpdate();
+
+	// Face for aesthetics
+	Attacker->FaceActorInstant(Target);
+
+	// LOS clamp
+	const int32 TargetModels    = FMath::Max(0, Target->ModelsCurrent);
+	const int32 VisibleModels   = CountVisibleTargetModels(Attacker, Target);
+	const int32 WoundsPerModel  = Target->GetWoundsPerModel();
+	const int32 MaxDamageByLOS  = VisibleModels * WoundsPerModel;
+	const int32 ClampedDamage   = FMath::Min(totalDamage, MaxDamageByLOS);
+
+	// Feel No Pain
+	const int32 FnpTN = Target->GetFeelNoPain(); // 2..6; 7 means none
+	const int32 FinalDamage = ApplyFeelNoPain(ClampedDamage, FnpTN);
+
+	// Debug / FX
+	const FVector L0  = Attacker->GetActorLocation();
+	const FVector L1  = Target->GetActorLocation();
+	const FVector Mid = (L0 + L1) * 0.5f + FVector(0,0,150.f);
+
+	const TCHAR* CoverTxt = CoverTypeToText(Cover);
+	const int32 savesMade = bHasSave ? (NormalWounds - (Unsaved - Ctx.CritWounds_NoSave)) : 0;
+
+	FString fnpNote;
+	if (FnpTN >= 2 && FnpTN <= 6)
+	{
+		fnpNote = FString::Printf(TEXT("\nFNP %d++ applied: %d -> %d"), FnpTN, ClampedDamage, FinalDamage);
+	}
+
+	const FString Prefix = DebugPrefix ? DebugPrefix : TEXT("[Shot]");
+	const FString Msg = FString::Printf(
+		TEXT("%s\nHit: %d/%d\nWound: %d/%d\nSave: %d/%d (%s%s)\nLOS: %d/%d models visible (cap %d dmg)\nDamage rolled: %d -> clamped: %d%s\nApplied on impact: %d"),
+		*Prefix,
+		Ctx.Hits, Ctx.Attacks,
+		Ctx.Wounds, Ctx.Hits,
+		savesMade, NormalWounds, CoverTxt, bIgnoreCover?TEXT(", ignores cover"):TEXT(""),
+		VisibleModels, TargetModels, MaxDamageByLOS,
+		totalDamage, ClampedDamage, *fnpNote,
+		FinalDamage);
+
+	const float ImpactDelay = Attacker->ImpactDelaySeconds;
+
+	// Cache target center & per-model sites NOW (before we apply damage)
+	TArray<FImpactSite> Sites;
+	BuildImpactSites_Server(Attacker, Target, Sites);
+	const FVector TargetCenter = Target->GetActorLocation();
+
+	// Tell everyone to play muzzle now and impacts later using cached sites
+	Attacker->Multicast_PlayMuzzleAndImpactFX_AllModels_WithSites(TargetCenter, Sites, ImpactDelay);
+
+	// Schedule damage after the same delay
+	FTimerDelegate Del;
+	Del.BindUFunction(this, FName("ApplyDelayedDamageAndReport"),
+					  Attacker, Target, FinalDamage, Mid, Msg);
+
+	FTimerHandle Tmp;
+	GetWorld()->GetTimerManager().SetTimer(Tmp, Del, FMath::Max(0.f, ImpactDelay), false);
+
+	// ===== Stage: PostResolveAttack =====
+	{
+		FStageResult K = FKeywordProcessor::BuildForStage(Ctx, ECombatEvent::PostResolveAttack, /*DamageApplied*/ClampedDamage);
+		FRollModifiers AMods = Attacker->CollectStageMods(ECombatEvent::PostResolveAttack, true, Target);
+		FRollModifiers TMods = Target  ->CollectStageMods(ECombatEvent::PostResolveAttack, false, Attacker);
+		FRollModifiers M = K.ModsNow; M.Accumulate(AMods); M.Accumulate(TMods);
+
+		if (M.MortalDamageImmediateToOwner    > 0) { Attacker->ApplyMortalDamage_Server(M.MortalDamageImmediateToOwner); }
+		if (M.MortalDamageImmediateToOpponent > 0) { Target  ->ApplyMortalDamage_Server(M.MortalDamageImmediateToOpponent); }
+
+		Attacker->ConsumeForStage(ECombatEvent::PostResolveAttack, true);
+		Target  ->ConsumeForStage(ECombatEvent::PostResolveAttack, false);
+
+		for (const FUnitModifier& G : K.GrantsToAttacker) Attacker->AddUnitModifier(G);
+		for (const FUnitModifier& G : K.GrantsToTarget)   Target  ->AddUnitModifier(G);
+	}
+
+	// Fill result for optional UI
+	Out.FinalDamage = FinalDamage;
+	Out.Attacks     = Ctx.Attacks;
+	Out.Hits        = Ctx.Hits;
+	Out.Wounds      = Ctx.Wounds;
+	Out.SavesMade   = savesMade;
+	Out.bIgnoredCover = bIgnoreCover;
+	Out.Cover       = Cover;
+
+	// No selection/target touching here; just refresh HUD/state.
+	if (AMatchGameState* S2 = GS())
+	{
+		S2->OnDeploymentChanged.Broadcast();
+		S2->ForceNetUpdate();
+	}
+
+	return Out;
+}
+
+
 void AMatchGameMode::Handle_ConfirmShoot(AMatchPlayerController* PC, AUnitBase* Attacker, AUnitBase* Target)
 {
     if (!HasAuthority() || !PC || !Attacker || !Target) return;
@@ -643,294 +962,16 @@ void AMatchGameMode::Handle_ConfirmShoot(AMatchPlayerController* PC, AUnitBase* 
     if (Attacker->OwningPS != PC->PlayerState) return;
     if (!ValidateShoot(Attacker, Target)) return;
 
-    // 🔹 No DT lookups. Pull the already-replicated weapon (server authoritative anyway)
-    const FWeaponProfile& Weapon = Attacker->GetActiveWeaponProfile();
+    ResolveRangedAttack_Internal(Attacker,Target,TEXT("[Shoot]"));
 
-    // ---- build your context ----
-    FAttackContext Ctx;
-    Ctx.Attacker          = Attacker;
-    Ctx.Target            = Target;
-    Ctx.Weapon            = &Weapon; // pointer is valid here
-    Ctx.RangeInches       = FVector::Dist(Attacker->GetActorLocation(), Target->GetActorLocation()) / CmPerTabletopInch();
-    Ctx.bAttackerMoved    = Attacker->bMovedThisTurn;
-    Ctx.bAttackerAdvanced = Attacker->bAdvancedThisTurn;
-
-    // base numbers (you can also use the cached reps if you prefer)
-    const int32 Models = FMath::Max(0, Attacker->ModelsCurrent);
-    Ctx.Attacks   = FMath::Max(0, Weapon.Attacks) * Models;
-    Ctx.HitNeed   = FMath::Clamp(Weapon.SkillToHit, 2, 6);
-    Ctx.WoundNeed = ToWoundTarget(Weapon.Strength, Target->GetToughness());
-    Ctx.AP        = FMath::Max(0, Weapon.AP);
-    Ctx.Damage    = FMath::Max(1, Weapon.Damage);
-
-    // ---- Movement-gated weapon rules ----
-    const bool bHasHeavy   = UWeaponKeywordHelpers::HasKeyword(Weapon, EWeaponKeyword::Heavy);
-    const bool bHasAssault = UWeaponKeywordHelpers::HasKeyword(Weapon, EWeaponKeyword::Assault);
-    const FWeaponKeywordData* RF = UWeaponKeywordHelpers::FindKeyword(Weapon, EWeaponKeyword::RapidFire);
-
-    // Assault: allow shooting after Advance; if not Assault and advanced, disallow shooting
-    if (Ctx.bAttackerAdvanced && !bHasAssault)
-    {
-        if (AMatchGameState* S2 = GS())
-            S2->Multicast_ScreenMsg(TEXT("Cannot shoot after Advancing (weapon is not Assault)."), FColor::Red, 3.f);
-        return; // block confirm
-    }
-
-    // Heavy: +1 to hit if did not move
-    if (bHasHeavy && !Ctx.bAttackerMoved)
-    {
-        Ctx.HitNeed = FMath::Clamp(Ctx.HitNeed - 1, 2, 6);
-    }
-
-    // Rapid Fire X: +X attacks per model at half-range or less
-    if (RF && RF->Value > 0)
-    {
-        const bool bHalfRange = (Ctx.RangeInches <= (float(Weapon.RangeInches) * 0.5f + KINDA_SMALL_NUMBER));
-        if (bHalfRange)
-        {
-            Ctx.Attacks += RF->Value * FMath::Max(0, Attacker->ModelsCurrent);
-        }
-    }
-
-    // Cover baseline (keywords/mods can override some effects like Ignores Cover)
-    int32 HitMod = 0, SaveMod = 0;
-    ECoverType Cover = ECoverType::None;
-    QueryCover(Attacker, Target, HitMod, SaveMod, Cover);
-
-    // ===== Stage: PreHitCalc (keywords + unit mods) =====
-    {
-        FStageResult K = FKeywordProcessor::BuildForStage(Ctx, ECombatEvent::PreHitCalc);
-        FRollModifiers AMods = Attacker->CollectStageMods(ECombatEvent::PreHitCalc, /*bAsAttacker*/true, Target);
-        FRollModifiers TMods = Target  ->CollectStageMods(ECombatEvent::PreHitCalc, /*bAsAttacker*/false, Attacker);
-        FRollModifiers M = K.ModsNow; M.Accumulate(AMods); M.Accumulate(TMods);
-
-        Ctx.Attacks += M.AttacksDelta;
-        Ctx.HitNeed  = FMath::Clamp(Ctx.HitNeed + M.HitNeedOffset, 2, 6);
-        const bool bAutoHit = M.bAutoHit;
-
-        Attacker->ConsumeForStage(ECombatEvent::PreHitCalc, true);
-        Target  ->ConsumeForStage(ECombatEvent::PreHitCalc, false);
-
-        // Apply cover hit mod AFTER keyword offsets (not affected by IgnoresCover)
-        Ctx.HitNeed = FMath::Clamp(Ctx.HitNeed + (HitMod * -1), 2, 6);
-
-        // Roll hits
-        if (bAutoHit)
-        {
-            Ctx.Hits = Ctx.Attacks;
-        }
-        else
-        {
-            for (int32 i=0; i<Ctx.Attacks; ++i)
-            {
-                const int32 r = D6();
-                if (r >= Ctx.HitNeed) ++Ctx.Hits;
-                Ctx.HitRolls.Add((uint8)r);
-            }
-        }
-
-        // PostHitRolls dice transforms (Sustained Hits, Lethal Hits)
-        // (Kept local here since these are *weapon* dice rules, not unit debuffs)
-        if (Ctx.Weapon)
-        {
-            // Sustained Hits X  (needs the Value => use FindKeyword)
-            if (const FWeaponKeywordData* SH =
-                    UWeaponKeywordHelpers::FindKeyword(*Ctx.Weapon, EWeaponKeyword::SustainedHits))
-            {
-                int32 Extra = 0;
-                for (uint8 r : Ctx.HitRolls)
-                {
-                    if (r >= Ctx.CritHitThreshold)
-                    {
-                        Extra += FMath::Max(0, SH->Value);
-                    }
-                }
-                Ctx.Hits += Extra;
-            }
-
-            // Lethal Hits (boolean check is enough => use HasKeyword)
-            if (UWeaponKeywordHelpers::HasKeyword(*Ctx.Weapon, EWeaponKeyword::LethalHits))
-            {
-                int32 AutoWounds = 0;
-                for (uint8 r : Ctx.HitRolls)
-                {
-                    if (r >= Ctx.CritHitThreshold)
-                    {
-                        ++AutoWounds;
-                    }
-                }
-                Ctx.Wounds += AutoWounds;
-            }
-        }
-    }
-
-    // ===== Stage: PreWoundCalc (unit mods; you can add reroll flags if desired) =====
-    {
-        FStageResult K = FKeywordProcessor::BuildForStage(Ctx, ECombatEvent::PreWoundCalc);
-        FRollModifiers AMods = Attacker->CollectStageMods(ECombatEvent::PreWoundCalc, true, Target);
-        FRollModifiers TMods = Target  ->CollectStageMods(ECombatEvent::PreWoundCalc, false, Attacker);
-        FRollModifiers M = K.ModsNow; M.Accumulate(AMods); M.Accumulate(TMods);
-
-        Ctx.WoundNeed = FMath::Clamp(Ctx.WoundNeed + M.WoundNeedOffset, 2, 6);
-
-        Attacker->ConsumeForStage(ECombatEvent::PreWoundCalc, true);
-        Target  ->ConsumeForStage(ECombatEvent::PreWoundCalc, false);
-
-        const int32 HitsNeedingWound = FMath::Max(0, Ctx.Hits - Ctx.Wounds); // subtract auto-wounds from Lethal
-        int32 NewWounds = 0;
-        for (int32 i=0; i<HitsNeedingWound; ++i)
-        {
-            const int32 r = D6();
-            if (r >= Ctx.WoundNeed) ++NewWounds;
-            Ctx.WoundRolls.Add((uint8)r);
-        }
-        Ctx.Wounds += NewWounds;
-
-        // PostWoundRolls dice transforms (Devastating Wounds -> no-save crits)
-        if (Ctx.Weapon && UWeaponKeywordHelpers::HasKeyword(*Ctx.Weapon, EWeaponKeyword::DevastatingWounds))
-        {
-            int32 Crits = 0;
-            for (uint8 r : Ctx.WoundRolls) if (r >= Ctx.CritWoundThreshold) ++Crits;
-            Ctx.CritWounds_NoSave += Crits;
-        }
-    }
-
-    // ===== Stage: PreSavingThrows (keywords + unit mods; AP, Damage, Ignores Cover) =====
-    bool bIgnoreCover = false;
-    {
-        FStageResult K = FKeywordProcessor::BuildForStage(Ctx, ECombatEvent::PreSavingThrows);
-        FRollModifiers AMods = Attacker->CollectStageMods(ECombatEvent::PreSavingThrows, true, Target);
-        FRollModifiers TMods = Target  ->CollectStageMods(ECombatEvent::PreSavingThrows, false, Attacker);
-        FRollModifiers M = K.ModsNow; M.Accumulate(AMods); M.Accumulate(TMods);
-
-        Ctx.AP     += M.APDelta;
-        Ctx.Damage += M.DamageDelta;
-        bIgnoreCover = M.bIgnoreCover;
-
-        Attacker->ConsumeForStage(ECombatEvent::PreSavingThrows, true);
-        Target  ->ConsumeForStage(ECombatEvent::PreSavingThrows, false);
-    }
-
-    const int32 SaveBase = Target->GetSave();
-
-    // 1) Apply AP to armour
-    int32 ArmourNeed = ModifiedSaveNeed(SaveBase, Ctx.AP);
-
-    // 2) Apply cover to *armour* only (invulns do not benefit from cover)
-    if (bIgnoreCover) { SaveMod = 0; }
-    ArmourNeed = FMath::Clamp(ArmourNeed - SaveMod, 2, 7);
-
-    // 3) Cap by invulnerable (2..6). 7 (or >6) means “no invuln”.
-    const int32 InvTN = Target->GetInvuln();
-    int32 SaveNeed = (InvTN >= 2 && InvTN <= 6) ? FMath::Min(ArmourNeed, InvTN) : ArmourNeed;
-
-    const bool bHasSave = (SaveNeed <= 6);
-
-    // Split normal vs no-save crit wounds
-    const int32 NormalWounds = FMath::Max(0, Ctx.Wounds - Ctx.CritWounds_NoSave);
-
-    int32 Unsaved = 0;
-    if (bHasSave)
-    {
-        for (int i=0; i<NormalWounds; ++i)
-            if (D6() < SaveNeed) ++Unsaved; // fail = unsaved
-    }
-    else
-    {
-        Unsaved = NormalWounds;
-    }
-
-    // Add crit-no-save wounds directly
-    Unsaved += Ctx.CritWounds_NoSave;
-
-    const int32 totalDamage = Unsaved * Ctx.Damage;
-
-    // mark shooter as having shot right away
-    Attacker->bHasShot = true;
-    Attacker->ForceNetUpdate();
-
-    // Rotate for aesthetics
-    Attacker->FaceActorInstant(Target);
-
-    // LOS: clamp damage by visible models
-    const int32 TargetModels    = FMath::Max(0, Target->ModelsCurrent);
-    const int32 VisibleModels   = CountVisibleTargetModels(Attacker, Target);
-    const int32 WoundsPerModel  = Target->GetWoundsPerModel();
-    const int32 MaxDamageByLOS  = VisibleModels * WoundsPerModel;
-    const int32 ClampedDamage   = FMath::Min(totalDamage, MaxDamageByLOS);
-
-    const int32 FnpTN = Target->GetFeelNoPain(); // 2..6; 7 means none
-    const int32 FinalDamage = ApplyFeelNoPain(ClampedDamage, FnpTN);
-
-    // World-space debug location
-    const FVector L0  = Attacker->GetActorLocation();
-    const FVector L1  = Target->GetActorLocation();
-    const FVector Mid = (L0 + L1) * 0.5f + FVector(0,0,150.f);
-
-    const TCHAR* CoverTxt = CoverTypeToText(Cover);
-    const int32 savesMade = bHasSave ? (NormalWounds - (Unsaved - Ctx.CritWounds_NoSave)) : 0;
-
-    FString fnpNote;
-    if (FnpTN >= 2 && FnpTN <= 6)
-    {
-        fnpNote = FString::Printf(TEXT("\nFNP %d++ applied: %d -> %d"), FnpTN, ClampedDamage, FinalDamage);
-    }
-
-    const FString Msg = FString::Printf(
-    TEXT("Hit: %d/%d\nWound: %d/%d\nSave: %d/%d (%s%s)\nLOS: %d/%d models visible (cap %d dmg)\nDamage rolled: %d -> clamped: %d%s\nApplied on impact: %d"),
-        Ctx.Hits, Ctx.Attacks,
-        Ctx.Wounds, Ctx.Hits,
-        savesMade, NormalWounds, CoverTxt, bIgnoreCover?TEXT(", ignores cover"):TEXT(""),
-        VisibleModels, TargetModels, MaxDamageByLOS,
-        totalDamage, ClampedDamage, *fnpNote,
-        FinalDamage);
-
-    const float ImpactDelay = Attacker->ImpactDelaySeconds;
-
-    // Cache target center & per-model sites NOW (before we apply damage)
-    TArray<FImpactSite> Sites;
-    BuildImpactSites_Server(Attacker, Target, Sites);
-    const FVector TargetCenter = Target->GetActorLocation();
-
-    // Tell everyone to play muzzle now and impacts later using cached sites
-    Attacker->Multicast_PlayMuzzleAndImpactFX_AllModels_WithSites(TargetCenter, Sites, ImpactDelay);
-
-    // Schedule damage after the same delay (unchanged)
-    FTimerDelegate Del;
-    Del.BindUFunction(this, FName("ApplyDelayedDamageAndReport"),
-                      Attacker, Target, FinalDamage, Mid, Msg);
-
-    FTimerHandle Tmp;
-    GetWorld()->GetTimerManager().SetTimer(Tmp, Del, FMath::Max(0.f, ImpactDelay), false);
-
-    // ===== Stage: PostResolveAttack (mods-only side effects + grants) =====
-    {
-        FStageResult K = FKeywordProcessor::BuildForStage(Ctx, ECombatEvent::PostResolveAttack, /*DamageApplied*/ClampedDamage);
-        FRollModifiers AMods = Attacker->CollectStageMods(ECombatEvent::PostResolveAttack, true, Target);
-        FRollModifiers TMods = Target  ->CollectStageMods(ECombatEvent::PostResolveAttack, false, Attacker);
-        FRollModifiers M = K.ModsNow; M.Accumulate(AMods); M.Accumulate(TMods);
-
-        // Apply immediate effects as generic mods (no bespoke functions)
-        if (M.MortalDamageImmediateToOwner    > 0) { Attacker->ApplyMortalDamage_Server(M.MortalDamageImmediateToOwner); }
-        if (M.MortalDamageImmediateToOpponent > 0) { Target  ->ApplyMortalDamage_Server(M.MortalDamageImmediateToOpponent); }
-
-        Attacker->ConsumeForStage(ECombatEvent::PostResolveAttack, true);
-        Target  ->ConsumeForStage(ECombatEvent::PostResolveAttack, false);
-
-        // Grants (time-boxed) — purely data-driven buffs/debuffs
-        for (const FUnitModifier& G : K.GrantsToAttacker) Attacker->AddUnitModifier(G);
-        for (const FUnitModifier& G : K.GrantsToTarget)   Target  ->AddUnitModifier(G);
-    }
-
-    if (S->Preview.Attacker == Attacker)
-    {
-        S->Preview.Attacker = nullptr;
-        S->Preview.Target   = nullptr;
-        S->Preview.Phase    = S->TurnPhase;
-    }
-
+	if (S->Preview.Attacker == Attacker)
+	{
+		S->Preview.Attacker = nullptr;
+		S->Preview.Target   = nullptr;
+		S->Preview.Phase    = S->TurnPhase;
+	}
+	
     S->SetGlobalTarget(nullptr);
-
     S->SetGlobalSelected(nullptr);
 
     if (IsValid(PC))
@@ -1216,6 +1257,7 @@ void AMatchGameMode::ResetUnitRoundStateFor(APlayerState* TurnOwner)
                 U->bHasShot         = false;
                 U->bMovedThisTurn   = false;
                 U->bAdvancedThisTurn= false;
+                U->bOverwatchArmed = false;
 
                 U->OnTurnAdvanced(); // decay turn-based unit mods
                 U->ForceNetUpdate();
@@ -1584,6 +1626,16 @@ void AMatchGameMode::NotifyUnitTransformChanged(AUnitBase* Changed)
             U->FaceNearestEnemyInstant();
         }
     }
+}
+
+void AMatchGameMode::Handle_OverwatchShot(AUnitBase* Attacker, AUnitBase* Target)
+{
+    if (!HasAuthority() || !Attacker || !Target) return;
+    AMatchGameState* S = GS(); if (!S || S->Phase != EMatchPhase::Battle) return;
+    if (!Attacker->IsEnemy(Target)) return;
+    if (!ValidateShoot(Attacker, Target)) return;
+
+    ResolveRangedAttack_Internal(Attacker, Target, TEXT("[Overwatch]"));
 }
 
 void AMatchGameMode::Handle_AdvanceUnit(AMatchPlayerController* PC, AUnitBase* Unit)

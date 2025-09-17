@@ -19,6 +19,17 @@ class ANetDebugTextActor;
 class AMatchPlayerController;
 class AUnitBase;
 
+struct FShotResolveResult
+{
+	int32 FinalDamage = 0;
+	int32 Hits = 0;
+	int32 Attacks = 0;
+	int32 Wounds = 0;
+	int32 SavesMade = 0;
+	bool  bIgnoredCover = false;
+	ECoverType Cover = ECoverType::None;
+};
+
 USTRUCT(BlueprintType)
 struct FSurvivorEntry
 {
@@ -217,6 +228,9 @@ public:
 
 	UPROPERTY(Transient)
 	TArray<TWeakObjectPtr<AUnitBase>> LastPotentialApplied;
+	
+	const TArray<TWeakObjectPtr<AUnitBase>>& GetLastPotentialTargets() const { return LastPotentialApplied; }
+
 };
 
 UCLASS()
@@ -232,6 +246,8 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly)
 	UDataTable* FactionsTable = nullptr;
 
+	FShotResolveResult ResolveRangedAttack_Internal(AUnitBase* Attacker, AUnitBase* Target, const TCHAR* DebugPrefix);
+	
 	// Server RPC endpoints (called by PC server functions)
 	void HandleRequestDeploy(class APlayerController* PC, FName UnitId, const FTransform& Where);
 	void HandleStartBattle(class APlayerController* PC);
@@ -239,7 +255,8 @@ public:
 	void ScoreObjectivesForRound();
 	void NotifyUnitTransformChanged(AUnitBase* Changed);
 	void Handle_AdvanceUnit(AMatchPlayerController* PC, AUnitBase* Unit);
-
+	void Handle_OverwatchShot(AUnitBase* Attacker, AUnitBase* Target);
+	
 	UFUNCTION()
 	void ApplyDelayedDamageAndReport(AUnitBase* Attacker, AUnitBase* Target, int32 TotalDamage, FVector DebugMid, FString DebugMsg);
 

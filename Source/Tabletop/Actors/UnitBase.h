@@ -153,6 +153,9 @@ public:
     UPROPERTY(Replicated, BlueprintReadOnly, Category="Stats|Defense")
     int32 FeelNoPainRep = 7;
 
+    UPROPERTY(Replicated, BlueprintReadOnly)
+    bool bOverwatchArmed = false;
+    
     UFUNCTION(BlueprintPure) int32 GetInvuln() const { return InvulnerableSaveRep; }
     UFUNCTION(BlueprintPure) int32 GetFeelNoPain() const { return FeelNoPainRep; }
 

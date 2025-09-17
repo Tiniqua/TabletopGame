@@ -39,6 +39,7 @@ enum class ECombatEvent : uint8
     Ability_Activated,       // when a unit toggles/uses an ability or action
     Ability_Expired,         // timed / uses burnt
     Unit_Destroyed,
+    Unit_Moved,
 };
 
 USTRUCT(BlueprintType)
