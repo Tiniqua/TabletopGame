@@ -92,7 +92,7 @@ static void BuildImpactSites_Server(const AUnitBase* Attacker, const AUnitBase* 
     }
 }
 
-static UAbilityEventSubsystem* AbilityBus(UWorld* W)
+UAbilityEventSubsystem* AMatchGameMode::AbilityBus(UWorld* W)
 {
     if (!W) return nullptr;
     if (UGameInstance* GI = W->GetGameInstance())
@@ -233,6 +233,22 @@ void AMatchGameState::Multicast_SetPotentialTargets_Implementation(const TArray<
             U->SetHighlightLocal(EUnitHighlight::PotentialEnemy);
         LastPotentialApplied.Add(U);
     }
+}
+
+void AMatchGameState::Multicast_SetPotentialAllies_Implementation(const TArray<AUnitBase*>& NewPotentials)
+{
+	// Clear old potentials
+	for (TWeakObjectPtr<AUnitBase>& WeakU : LastPotentialApplied)
+		if (WeakU.IsValid()) WeakU->SetHighlightLocal(EUnitHighlight::None);
+	LastPotentialApplied.Reset();
+
+	// Apply new (use PotentialAlly instead of PotentialEnemy)
+	for (AUnitBase* U : NewPotentials)
+	{
+		if (IsValid(U) && U != TargetUnitGlobal)
+			U->SetHighlightLocal(EUnitHighlight::PotentialAlly);
+		LastPotentialApplied.Add(U);
+	}
 }
 
 void AMatchGameState::Multicast_ClearPotentialTargets_Implementation()
@@ -806,6 +822,7 @@ FShotResolveResult AMatchGameMode::ResolveRangedAttack_Internal(
 
 	// ===== Stage: PreSavingThrows =====
 	bool bIgnoreCover = false;
+	int32 InvulnOffset = 0;
 	{
 		FStageResult K = FKeywordProcessor::BuildForStage(Ctx, ECombatEvent::PreSavingThrows);
 		FRollModifiers AMods = Attacker->CollectStageMods(ECombatEvent::PreSavingThrows, true, Target);
@@ -815,6 +832,8 @@ FShotResolveResult AMatchGameMode::ResolveRangedAttack_Internal(
 		Ctx.AP     += M.APDelta;
 		Ctx.Damage += M.DamageDelta;
 		bIgnoreCover = M.bIgnoreCover;
+
+		InvulnOffset = M.InvulnNeedOffset;
 
 		Attacker->ConsumeForStage(ECombatEvent::PreSavingThrows, true);
 		Target  ->ConsumeForStage(ECombatEvent::PreSavingThrows, false);
@@ -830,7 +849,8 @@ FShotResolveResult AMatchGameMode::ResolveRangedAttack_Internal(
 	ArmourNeed = FMath::Clamp(ArmourNeed - SaveMod, 2, 7);
 
 	// 3) Cap by invulnerable
-	const int32 InvTN = Target->GetInvuln();
+	int32 InvTN = Target->GetInvuln();                   // 2..6, 7 = none
+	InvTN = FMath::Clamp(InvTN + InvulnOffset, 2, 7);    // NEW
 	int32 SaveNeed = (InvTN >= 2 && InvTN <= 6) ? FMath::Min(ArmourNeed, InvTN) : ArmourNeed;
 
 	const bool bHasSave = (SaveNeed <= 6);
@@ -869,7 +889,21 @@ FShotResolveResult AMatchGameMode::ResolveRangedAttack_Internal(
 	const int32 ClampedDamage   = FMath::Min(totalDamage, MaxDamageByLOS);
 
 	// Feel No Pain
-	const int32 FnpTN = Target->GetFeelNoPain(); // 2..6; 7 means none
+	int32 FnpTN = Target->GetFeelNoPain(); // 2..6; 7 none
+
+	// Allow mods at PostDamageCompute (right before FNP application)
+	{
+		FStageResult K = FKeywordProcessor::BuildForStage(Ctx, ECombatEvent::PostDamageCompute, /*DamageApplied*/ClampedDamage);
+		FRollModifiers AMods = Attacker->CollectStageMods(ECombatEvent::PostDamageCompute, true, Target);
+		FRollModifiers TMods = Target  ->CollectStageMods(ECombatEvent::PostDamageCompute, false, Attacker);
+		FRollModifiers M = K.ModsNow; M.Accumulate(AMods); M.Accumulate(TMods);
+
+		FnpTN = FMath::Clamp(FnpTN + M.FnpNeedOffset, 2, 7); // NEW
+
+		Attacker->ConsumeForStage(ECombatEvent::PostDamageCompute, true);
+		Target  ->ConsumeForStage(ECombatEvent::PostDamageCompute, false);
+	}
+
 	const int32 FinalDamage = ApplyFeelNoPain(ClampedDamage, FnpTN);
 
 	// Debug / FX

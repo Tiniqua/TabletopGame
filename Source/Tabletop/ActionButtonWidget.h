@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include "CoreMinimal.h"
+#include "Actors/UnitAction.h"
 #include "Blueprint/UserWidget.h"
 #include "Components/Button.h"
 #include "Components/TextBlock.h"
@@ -23,6 +24,8 @@ public:
 	// What this row represents
 	UPROPERTY() UUnitAction* Action = nullptr;
 
+	UPROPERTY() AUnitBase* Owner = nullptr;
+
 	// Parent binds to this to learn which action was clicked
 	UPROPERTY(BlueprintAssignable) FOnActionButtonClicked OnActionClicked;
 
@@ -45,6 +48,7 @@ public:
 private:
 	UFUNCTION() void HandleClicked()
 	{
+		Action->BeginPreview(Owner);
 		OnActionClicked.Broadcast(Action);
 	}
 };

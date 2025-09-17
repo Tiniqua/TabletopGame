@@ -21,7 +21,8 @@ enum class EUnitHighlight : uint8
     None      UMETA(DisplayName="None"),
     Friendly  UMETA(DisplayName="Friendly"),
     Enemy     UMETA(DisplayName="Enemy"),
-    PotentialEnemy   UMETA(DisplayName="Potential")
+    PotentialEnemy   UMETA(DisplayName="Potential"),
+    PotentialAlly UMETA(DisplayName="Potential Ally")
 };
 
 USTRUCT()
@@ -285,7 +286,7 @@ public:
     UFUNCTION(BlueprintCallable, Category="Selection|Outline")
     void SetHighlightLocal(EUnitHighlight Mode);
 
-    
+    void RebuildFormation();
     
 protected:
     virtual void BeginPlay() override;
@@ -293,7 +294,7 @@ protected:
     UFUNCTION() void OnRep_Models();
     UFUNCTION() void OnRep_Move();
 
-    void RebuildFormation();
+    
     void RebuildRuntimeActions();
     void RebuildRuntimeAbilitiesFromSources();
 
@@ -327,6 +328,10 @@ protected:
 
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Selection|Outline")
     UMaterialInterface* OutlinePotentialEnemyMaterial = nullptr;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Selection|Outline")
+    UMaterialInterface* OutlinePotentialAllyMaterial = nullptr;
+    
     
 
 private:

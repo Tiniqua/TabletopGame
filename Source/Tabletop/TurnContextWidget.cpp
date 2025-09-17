@@ -241,6 +241,7 @@ void UTurnContextWidget::RebuildActionButtons(AUnitBase* Sel)
             : FText::Format(NSLOCTEXT("Actions","ActionFree","{0}: Free"), Act->Desc.DisplayName));
 
         Row->Init(Act, CostText, bCan);
+        Row->Owner = Sel;
         Row->OnActionClicked.AddDynamic(this, &UTurnContextWidget::HandleDynamicActionClicked);
         ActionsPanel->AddChild(Row);
     }

@@ -1,10 +1,18 @@
 ﻿#pragma once
+
 #include "CoreMinimal.h"
 #include "UObject/Object.h"
-
 #include "UnitAction.generated.h"
 
+// Forward declarations only (avoid heavy includes here)
+class AUnitBase;
 class AMatchPlayerController;
+class AMatchGameMode;
+class AMatchGameState;
+class UUnitActionResourceComponent;
+class UAbilityEventSubsystem;
+struct FAbilityEventContext;
+
 UENUM(BlueprintType)
 enum class ETurnPhase : uint8
 {
@@ -12,18 +20,16 @@ enum class ETurnPhase : uint8
 	Shoot
 };
 
-class AUnitBase;
-struct FAbilityEventContext;
-
 USTRUCT(BlueprintType)
 struct FActionDescriptor
 {
 	GENERATED_BODY()
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) FName ActionId = NAME_None;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) FText DisplayName;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) int32 Cost = 1;         // AP cost
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) ETurnPhase Phase = ETurnPhase::Move;
-	
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) int32 UsesPerTurn = 0;  // 0 = unlimited
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) int32 UsesPerPhase = 0; // 0 = unlimited
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) int32 UsesPerMatch = 0;
@@ -31,17 +37,18 @@ struct FActionDescriptor
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) bool bRequiresGroundClick = false;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) bool bRequiresEnemyTarget = false;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly)
-	int32 NextPhaseAPCost = 0; 
+	// If this action applies a debt to the next phase's AP
+	UPROPERTY(EditAnywhere, BlueprintReadOnly) int32 NextPhaseAPCost = 0;
 };
 
 USTRUCT(BlueprintType)
 struct FActionRuntimeArgs
 {
 	GENERATED_BODY()
-	UPROPERTY(EditAnywhere, BlueprintReadWrite) FVector TargetLocation = FVector::ZeroVector;
-	UPROPERTY(EditAnywhere, BlueprintReadWrite) AUnitBase* TargetUnit = nullptr;
-	UPROPERTY(EditAnywhere, BlueprintReadWrite) uint8 Aux = 0; // small extra param
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite) FVector     TargetLocation = FVector::ZeroVector;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite) AUnitBase* TargetUnit     = nullptr;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite) uint8      Aux            = 0; // small extra param
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite) AMatchPlayerController* InstigatorPC = nullptr;
 };
@@ -59,6 +66,13 @@ public:
 	UFUNCTION(BlueprintNativeEvent) void Execute(AUnitBase* Unit, const FActionRuntimeArgs& Args);
 	virtual void Execute_Implementation(AUnitBase* Unit, const FActionRuntimeArgs& Args);
 
+	// Optional live preview hooks for UI highlight, ghost placement, etc.
+	UFUNCTION(BlueprintNativeEvent) void BeginPreview(AUnitBase* Unit);
+	virtual void BeginPreview_Implementation(AUnitBase* Unit);
+
+	UFUNCTION(BlueprintNativeEvent) void EndPreview(AUnitBase* Unit);
+	virtual void EndPreview_Implementation(AUnitBase* Unit);
+
 	// Optional: allow actions to bind to global events (e.g., reset usage caps)
 	virtual void Setup(AUnitBase* Unit) {}
 
@@ -67,21 +81,15 @@ protected:
 };
 
 
-// DEFAULT IMPLEMENTATIONS FOR BASIC ACTIONS - HERE BECAUSE NO POINT MAKING MORE FILES
-// -----------------------------------------------------------------------------------
+// =================== DEFAULT / BUILT-IN ACTIONS ===================
+
 UCLASS()
 class TABLETOP_API UAction_Move : public UUnitAction
 {
 	GENERATED_BODY()
 public:
-	UAction_Move()
-	{
-		Desc.ActionId = TEXT("Move");
-		Desc.DisplayName = FText::FromString(TEXT("Move"));
-		Desc.Cost = 1; Desc.Phase = ETurnPhase::Move;
-		Desc.bRequiresGroundClick = true;
-		//Desc.UsesPerTurn = 1; - Non functional yet
-	}
+	UAction_Move();
+
 	virtual bool CanExecute_Implementation(AUnitBase* Unit, const FActionRuntimeArgs& Args) const override;
 	virtual void Execute_Implementation(AUnitBase* Unit, const FActionRuntimeArgs& Args) override;
 };
@@ -91,13 +99,8 @@ class TABLETOP_API UAction_Advance : public UUnitAction
 {
 	GENERATED_BODY()
 public:
-	UAction_Advance()
-	{
-		Desc.ActionId = TEXT("Advance");
-		Desc.DisplayName = FText::FromString(TEXT("Advance"));
-		Desc.Cost = 1; Desc.Phase = ETurnPhase::Move;
-		Desc.NextPhaseAPCost = 1;
-	}
+	UAction_Advance();
+
 	virtual bool CanExecute_Implementation(AUnitBase* Unit, const FActionRuntimeArgs& Args) const override;
 	virtual void Execute_Implementation(AUnitBase* Unit, const FActionRuntimeArgs& Args) override;
 };
@@ -107,13 +110,8 @@ class TABLETOP_API UAction_Shoot : public UUnitAction
 {
 	GENERATED_BODY()
 public:
-	UAction_Shoot()
-	{
-		Desc.ActionId = TEXT("Shoot");
-		Desc.DisplayName = FText::FromString(TEXT("Shoot"));
-		Desc.Cost = 2; Desc.Phase = ETurnPhase::Shoot;
-		Desc.bRequiresEnemyTarget = true;
-	}
+	UAction_Shoot();
+
 	virtual bool CanExecute_Implementation(AUnitBase* Unit, const FActionRuntimeArgs& Args) const override;
 	virtual void Execute_Implementation(AUnitBase* Unit, const FActionRuntimeArgs& Args) override;
 };
@@ -123,13 +121,7 @@ class TABLETOP_API UAction_Overwatch : public UUnitAction
 {
 	GENERATED_BODY()
 public:
-	UAction_Overwatch()
-	{
-		Desc.ActionId   = TEXT("Overwatch");
-		Desc.DisplayName= FText::FromString(TEXT("Overwatch"));
-		Desc.Cost       = 2;
-		Desc.Phase      = ETurnPhase::Shoot;
-	}
+	UAction_Overwatch();
 
 	virtual void Setup(AUnitBase* Unit) override;
 	virtual bool CanExecute_Implementation(AUnitBase* Unit, const FActionRuntimeArgs& Args) const override;
@@ -139,4 +131,71 @@ private:
 	UFUNCTION() void OnAnyEvent(const struct FAbilityEventContext& Ctx);
 
 	TWeakObjectPtr<AUnitBase> OwnerUnit;
+};
+
+// +1 to hit for next shot
+UCLASS()
+class TABLETOP_API UAction_TakeAim : public UUnitAction
+{
+	GENERATED_BODY()
+public:
+	UAction_TakeAim();
+
+	virtual void Execute_Implementation(AUnitBase* Unit, const FActionRuntimeArgs& Args) override;
+};
+
+// FNP easier until end of turn (defense buff)
+UCLASS()
+class TABLETOP_API UAction_Hunker : public UUnitAction
+{
+	GENERATED_BODY()
+public:
+	UAction_Hunker();
+
+	virtual bool CanExecute_Implementation(AUnitBase* Unit, const FActionRuntimeArgs& Args) const override;
+	virtual void Execute_Implementation(AUnitBase* Unit, const FActionRuntimeArgs& Args) override;
+};
+
+// Invulnerable save easier until end of turn
+UCLASS()
+class TABLETOP_API UAction_Brace : public UUnitAction
+{
+	GENERATED_BODY()
+public:
+	UAction_Brace();
+
+	virtual void Execute_Implementation(AUnitBase* Unit, const FActionRuntimeArgs& Args) override;
+};
+
+// Self-heal D3 (3 uses per match, 1/turn). Usable in Move or Shoot.
+UCLASS()
+class TABLETOP_API UAction_Medpack : public UUnitAction
+{
+	GENERATED_BODY()
+public:
+	UAction_Medpack();
+
+	virtual bool CanExecute_Implementation(AUnitBase* Unit, const FActionRuntimeArgs& Args) const override;
+	virtual void Execute_Implementation(AUnitBase* Unit, const FActionRuntimeArgs& Args) override;
+};
+
+// Radial heal (target closest friendly within 12") for D6. 2 uses/match, 1/turn. Usable in Move or Shoot.
+// Also previews the target via BeginPreview/EndPreview.
+UCLASS()
+class TABLETOP_API UAction_FieldMedic : public UUnitAction
+{
+	GENERATED_BODY()
+public:
+	UAction_FieldMedic();
+
+	virtual bool CanExecute_Implementation(AUnitBase* Unit, const FActionRuntimeArgs& Args) const override;
+	virtual void Execute_Implementation(AUnitBase* Unit, const FActionRuntimeArgs& Args) override;
+
+	virtual void BeginPreview_Implementation(AUnitBase* Unit) override;
+	virtual void EndPreview_Implementation(AUnitBase* Unit) override;
+
+private:
+	TWeakObjectPtr<AUnitBase> CachedPreviewTarget;
+
+	AUnitBase* FindClosestAllyWithin12(AUnitBase* U) const;
 };

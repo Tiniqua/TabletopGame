@@ -60,6 +60,10 @@ struct FRollModifiers
     UPROPERTY(EditAnywhere, BlueprintReadWrite) bool bRerollAllWounds  = false;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) bool bRerollOnesWounds = false;
 
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 InvulnNeedOffset = 0; // -1 makes invuln better (2..6 clamp)
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 FnpNeedOffset    = 0; // -1 makes FNP better (2..6 clamp)
+
+
     // Other toggles
     UPROPERTY(EditAnywhere, BlueprintReadWrite) bool bIgnoreCover = false;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) bool bAutoHit     = false;
@@ -85,7 +89,10 @@ struct FRollModifiers
 
         bIgnoreCover |= O.bIgnoreCover;
         bAutoHit     |= O.bAutoHit;
-
+        
+        InvulnNeedOffset += O.InvulnNeedOffset;
+        FnpNeedOffset    += O.FnpNeedOffset;
+        
         MortalDamageImmediateToOwner    += O.MortalDamageImmediateToOwner;
         MortalDamageImmediateToOpponent += O.MortalDamageImmediateToOpponent;
     }

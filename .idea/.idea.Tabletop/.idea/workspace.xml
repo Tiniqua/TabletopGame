@@ -458,7 +458,7 @@
       <workItem from="1758019609539" duration="781000" />
       <workItem from="1758020428025" duration="16639000" />
       <workItem from="1758098070841" duration="14864000" />
-      <workItem from="1758113018229" duration="6037000" />
+      <workItem from="1758113018229" duration="11576000" />
     </task>
     <servers />
   </component>
@@ -468,17 +468,6 @@
   <component name="UnityUnitTestConfiguration" currentTestLauncher="NUnit" />
   <component name="VcsManagerConfiguration">
     <option name="CLEAR_INITIAL_COMMIT_MESSAGE" value="true" />
-  </component>
-  <component name="XDebuggerManager">
-    <breakpoint-manager>
-      <breakpoints>
-        <line-breakpoint enabled="true" type="com.jetbrains.cidr.execution.debugger.OCBreakpointType">
-          <url>file://$PROJECT_DIR$/Source/Tabletop/Controllers/MatchPlayerController.cpp</url>
-          <line>100</line>
-          <option name="timeStamp" value="2" />
-        </line-breakpoint>
-      </breakpoints>
-    </breakpoint-manager>
   </component>
   <component name="XSLT-Support.FileAssociations.UIState">
     <expand />

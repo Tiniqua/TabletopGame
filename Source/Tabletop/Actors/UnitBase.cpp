@@ -614,6 +614,7 @@ void AUnitBase::SetHighlightLocal(EUnitHighlight Mode)
     case EUnitHighlight::Friendly:       ApplyOutlineToAllModels(OutlineFriendlyMaterial);        break;
     case EUnitHighlight::Enemy:          ApplyOutlineToAllModels(OutlineEnemyMaterial);           break;
     case EUnitHighlight::PotentialEnemy: ApplyOutlineToAllModels(OutlinePotentialEnemyMaterial);  break;
+    case EUnitHighlight::PotentialAlly: ApplyOutlineToAllModels(OutlinePotentialAllyMaterial); break;
     default:                              ApplyOutlineToAllModels(nullptr);                       break;
     }
 }

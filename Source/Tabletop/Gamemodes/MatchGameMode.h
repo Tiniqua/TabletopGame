@@ -6,6 +6,7 @@
 #include "GameFramework/GameModeBase.h"
 #include "GameFramework/GameStateBase.h"
 #include "Net/UnrealNetwork.h"
+#include "Tabletop/AbiltyEventSubsystem.h"
 #include "Tabletop/UnitActionResourceComponent.h"
 #include "Tabletop/Actors/CoverVolume.h"
 #include "Tabletop/Actors/UnitAction.h"
@@ -225,6 +226,9 @@ public:
 	void Multicast_SetPotentialTargets(const TArray<AUnitBase*>& NewPotentials);
 
 	UFUNCTION(NetMulticast, Unreliable)
+	void Multicast_SetPotentialAllies(const TArray<AUnitBase*>& NewPotentials);
+
+	UFUNCTION(NetMulticast, Unreliable)
 	void Multicast_ClearPotentialTargets();
 
 	UPROPERTY(Transient)
@@ -239,6 +243,7 @@ class TABLETOP_API AMatchGameMode : public AGameModeBase
 {
 	GENERATED_BODY()
 public:
+	UAbilityEventSubsystem* AbilityBus(UWorld* W);
 	int32 ApplyFeelNoPain(int32 IncomingDamage, int32 FnpTN);
 	AMatchGameMode();
 	virtual void HandleSeamlessTravelPlayer(AController*& C) override;
