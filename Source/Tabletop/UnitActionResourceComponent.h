@@ -22,7 +22,7 @@ public:
 	int32 CurrentAP = 0;
 	
 	UPROPERTY(Replicated, BlueprintReadOnly, Category="AP")
-	int32 MaxAP = 2;
+	int32 MaxAP = 4;
 
 	UUnitActionResourceComponent();
 	

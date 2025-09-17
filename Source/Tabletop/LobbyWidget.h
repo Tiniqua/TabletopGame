@@ -23,8 +23,6 @@ protected:
 	UPROPERTY(meta=(BindWidget)) UEditableTextBox* P1Name = nullptr;
 	UPROPERTY(meta=(BindWidget)) UEditableTextBox* P2Name = nullptr;
 	UPROPERTY(meta=(BindWidget)) UButton* BothReady = nullptr;
-
-	UPROPERTY(meta=(BindWidgetOptional)) UButton* InviteButton = nullptr;
 	
 	UPROPERTY(meta=(BindWidgetOptional)) UEditableTextBox* LobbyStatusBox = nullptr;
 
@@ -32,13 +30,9 @@ private:
 	UFUNCTION() void OnP1ReadyClicked();
 	UFUNCTION() void OnP2ReadyClicked();
 	UFUNCTION() void OnBothReadyClicked();
-	UFUNCTION() void OnInviteClicked();
 	
 	class ASetupGameState* GetSetupGS() const;
 	class ASetupPlayerController* GetSetupPC() const;
-	
-	UFUNCTION(BlueprintCallable)
-	void ShowSteamInviteUI();
 
 	FTimerHandle LobbyStatusRefreshHandle;
 

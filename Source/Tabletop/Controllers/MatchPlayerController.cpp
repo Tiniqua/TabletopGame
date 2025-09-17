@@ -150,7 +150,18 @@ void AMatchPlayerController::OnLeftClick()
         return;
     }
 
-    // ---------- Phase-agnostic: try unit click first ----------
+    // ---------- From here on, ONLY act during your Battle turn ----------
+    const bool bMyTurn = (S->Phase == EMatchPhase::Battle) && (S->CurrentTurn == PlayerState);
+    if (!bMyTurn)
+    {
+        // Optional: clear any armed actions/target mode so UI doesn't lie
+        PendingGroundActionId = NAME_None;
+        PendingActionUnit     = nullptr;
+        bTargetMode           = false;
+        return;
+    }
+
+    // ---------- Phase-agnostic (but only when it's your turn): try unit click first ----------
     if (AUnitBase* Clicked = TraceUnit())
     {
         const bool bClickedFriendly = (Clicked->OwningPS == PlayerState);
@@ -166,16 +177,12 @@ void AMatchPlayerController::OnLeftClick()
         // Otherwise, clicking a friendly just (re)selects it
         if (bClickedFriendly)
         {
-            SelectUnit(Clicked);
+            SelectUnit(Clicked); // ideally this calls a server RPC that ends up in GS->SetGlobalSelected
             return;
         }
 
         // Clicked an enemy outside target mode -> ignore
     }
-
-    // From here on, only your turn matters
-    const bool bMyTurn = (S->CurrentTurn == PlayerState);
-    if (!bMyTurn) return;
 
     // ---------- Pending ground-required action? ----------
     if (PendingGroundActionId != NAME_None && SelectedUnit && SelectedUnit->OwningPS == PlayerState)
@@ -195,26 +202,14 @@ void AMatchPlayerController::OnLeftClick()
     // ---------- Move phase ----------
     if (S->TurnPhase == ETurnPhase::Move)
     {
-        // Action-only movement (recommended): do nothing on ground click here.
-        // The user should click the "Move" action first to arm a ground click.
-        // --- If you want HYBRID (direct move), uncomment:
-        /*
-        if (SelectedUnit && SelectedUnit->OwningPS == PlayerState)
-        {
-            FHitResult Hit;
-            if (TraceGround_Battle(Hit))
-            {
-                Server_MoveUnit(SelectedUnit, Hit.ImpactPoint);
-                return;
-            }
-        }
-        */
+        // (keep your current behavior / optional hybrid direct-move)
         return;
     }
 
     // ---------- Shoot phase (not in target mode) ----------
     // Nothing else to do here; selecting friendlies was handled above.
 }
+
 
 
 void AMatchPlayerController::Client_ShowSummary_Implementation()

@@ -11,6 +11,7 @@
 #include "UnitAction.h"
 #include "Kismet/GameplayStatics.h"
 #include "Tabletop/UnitActionResourceComponent.h"
+#include "Tabletop/WeaponKeywordHelpers.h"
 #include "Tabletop/Gamemodes/MatchGameMode.h"
 #include "Tabletop/PlayerStates/TabletopPlayerState.h"
 
@@ -263,6 +264,63 @@ void AUnitBase::OnRep_CurrentWeapon()
     EnsureRuntimeBuilt();
 }
 
+void AUnitBase::ApplyAPPhaseStart(ETurnPhase Phase)
+{
+    if (!HasAuthority()) return;
+
+    UUnitActionResourceComponent* AP = FindComponentByClass<UUnitActionResourceComponent>();
+    if (!AP) return;
+
+    // Start from defaults every phase
+    const int32 BaseMax = AP->DefaultMaxAP;
+    int32 NewMax = BaseMax;
+
+    // 1) Consume pending debt from previous phase
+    const int32 Debt = FMath::Max(0, NextPhaseAPDebt);
+    NewMax = FMath::Max(0, NewMax - Debt);
+    NextPhaseAPDebt = 0; // consumed now
+
+    // 2) Assault: +1 AP in Shooting phase (new rule, no Advance requirement)
+    if (Phase == ETurnPhase::Shoot &&
+        UWeaponKeywordHelpers::HasKeyword(GetActiveWeaponProfile(), EWeaponKeyword::Assault))
+    {
+        ++NewMax;
+    }
+
+    // 3) Objective control: +1 AP if this unit is inside an objective it controls,
+    //    BUT NOT on Round 1 Move (deployment advantage guard).
+    bool bGiveObjectiveAP = true;
+    if (const AMatchGameState* GS = GetWorld() ? GetWorld()->GetGameState<AMatchGameState>() : nullptr)
+    {
+        if (GS->CurrentRound <= 1 && Phase == ETurnPhase::Move)
+        {
+            bGiveObjectiveAP = false; // no objective AP on the very first movement phase
+        }
+    }
+
+    if (bGiveObjectiveAP)
+    {
+        // Iterate objectives and check control + presence
+        for (TActorIterator<AObjectiveMarker> It(GetWorld()); It; ++It)
+        {
+            const AObjectiveMarker* Obj = *It;
+            if (!Obj) continue;
+
+            if (Obj->GetControllingPlayerState() == OwningPS && GetObjectiveControlAt(Obj) > 0)
+            {
+                ++NewMax; // only +1 even if standing in multiple; break after first
+                break;
+            }
+        }
+    }
+
+    // Apply and replicate
+    AP->MaxAP     = FMath::Max(0, NewMax);
+    AP->CurrentAP = AP->MaxAP;
+
+    ForceNetUpdate();
+}
+
 FTransform AUnitBase::GetMuzzleTransform(int32 ModelIndex) const
 {
     if (!ModelMeshes.IsValidIndex(ModelIndex) || !ModelMeshes[ModelIndex])
@@ -278,17 +336,13 @@ FTransform AUnitBase::GetMuzzleTransform(int32 ModelIndex) const
     const FTransform WT = C->GetComponentTransform();
     const FVector   WLoc = WT.TransformPosition(MuzzleOffsetLocal);
 
-    FRotator OutRot = WT.Rotator();
-    OutRot.Yaw += FacingYawOffsetDeg;
-
-    return FTransform(OutRot, WLoc, WT.GetScale3D());
+    // Keep the mesh’s world rotation; no FacingYawOffsetDeg here
+    return FTransform(WT.GetRotation(), WLoc, WT.GetScale3D());
 }
 
-void AUnitBase::Multicast_PlayMuzzleAndImpactFX_AllModels_Implementation(AUnitBase* TargetUnit, float DelaySeconds)
+void AUnitBase::Multicast_PlayMuzzleAndImpactFX_AllModels_WithSites_Implementation(const FVector& TargetCenter, const TArray<FImpactSite>& Sites, float DelaySeconds)
 {
-    if (!IsValid(TargetUnit)) return;
-
-    const FVector TargetCenter = TargetUnit->GetActorLocation();
+    // ---- MUZZLE (aim from each muzzle to the provided target center) ----
     for (int32 i = 0; i < ModelMeshes.Num(); ++i)
     {
         UStaticMeshComponent* C = ModelMeshes[i];
@@ -302,8 +356,30 @@ void AUnitBase::Multicast_PlayMuzzleAndImpactFX_AllModels_Implementation(AUnitBa
         if (Snd_Muzzle) UGameplayStatics::PlaySoundAtLocation(this, Snd_Muzzle, MuzzLoc, 1.f, 1.f, 0.f, SndAttenuation, SndConcurrency);
     }
 
+    // ---- IMPACT (use only cached sites; target actor can be gone) ----
+    TArray<FImpactSite> SitesCopy = Sites; // capture by value for lambda safety
+
     FTimerDelegate Del;
-    Del.BindUFunction(this, FName("PlayImpactFXAndSounds_Delayed"), TargetUnit);
+    Del.BindLambda([this, SitesCopy]()
+    {
+        UWorld* W = GetWorld();
+        if (!W) return;
+
+        if (SitesCopy.Num() == 0)
+        {
+            // Fallback: single center impact at attacker forward a bit (or skip)
+            const FVector FallbackLoc = GetActorLocation() + GetActorForwardVector()*100.f + FVector(0,0,50.f);
+            if (FX_Impact) UNiagaraFunctionLibrary::SpawnSystemAtLocation(W, FX_Impact, FallbackLoc, GetActorRotation());
+            if (Snd_Impact) UGameplayStatics::PlaySoundAtLocation(this, Snd_Impact, FallbackLoc, 1.f, 1.f, 0.f, SndAttenuation, SndConcurrency);
+            return;
+        }
+
+        for (const FImpactSite& S : SitesCopy)
+        {
+            if (FX_Impact) UNiagaraFunctionLibrary::SpawnSystemAtLocation(W, FX_Impact, S.Loc, S.Rot);
+            if (Snd_Impact) UGameplayStatics::PlaySoundAtLocation(this, Snd_Impact, S.Loc, 1.f, 1.f, 0.f, SndAttenuation, SndConcurrency);
+        }
+    });
 
     GetWorld()->GetTimerManager().ClearTimer(ImpactFXTimerHandle);
     GetWorld()->GetTimerManager().SetTimer(ImpactFXTimerHandle, Del, FMath::Max(0.f, DelaySeconds), false);
@@ -334,13 +410,12 @@ void AUnitBase::PlayImpactFXAndSounds_Delayed(AUnitBase* TargetUnit)
 {
     if (!IsValid(TargetUnit)) return;
 
-    const FVector AttackerCenter = GetActorLocation();
-
     for (int32 j = 0; j < TargetUnit->ModelMeshes.Num(); ++j)
     {
         UStaticMeshComponent* TC = TargetUnit->ModelMeshes[j];
         if (!IsValid(TC)) continue;
 
+        // Compute the exact impact location per target model
         FVector ImpactLoc;
         if (TC->DoesSocketExist(TargetUnit->ImpactSocketName))
         {
@@ -351,14 +426,18 @@ void AUnitBase::PlayImpactFXAndSounds_Delayed(AUnitBase* TargetUnit)
             ImpactLoc = TC->GetComponentTransform().TransformPosition(TargetUnit->ImpactOffsetLocal);
         }
 
-        const FVector InDir = (ImpactLoc - AttackerCenter).GetSafeNormal();
-        FRotator ImpactRot = InDir.Rotation();
-        ImpactRot.Yaw -= FacingYawOffsetDeg; 
+        // Find the shooter muzzle closest to THIS impact point
+        const int32 BestShooterIdx = FindBestShooterModelIndex(ImpactLoc);
+        const FVector BestMuzzleLoc = GetMuzzleTransform(BestShooterIdx).GetLocation();
+
+        // Incoming direction = (target -> shooter)
+        const FRotator IncomingRot = (BestMuzzleLoc - ImpactLoc).Rotation();
 
         if (FX_Impact)
         {
-            UNiagaraFunctionLibrary::SpawnSystemAtLocation(GetWorld(), FX_Impact, ImpactLoc, ImpactRot);
+            UNiagaraFunctionLibrary::SpawnSystemAtLocation(GetWorld(), FX_Impact, ImpactLoc, IncomingRot);
         }
+
         if (Snd_Impact)
         {
             UGameplayStatics::PlaySoundAtLocation(this, Snd_Impact, ImpactLoc, 1.f, 1.f, 0.f, SndAttenuation, SndConcurrency);
@@ -540,15 +619,10 @@ void AUnitBase::SetHighlightLocal(EUnitHighlight Mode)
 
     switch (Mode)
     {
-    case EUnitHighlight::Friendly:
-        ApplyOutlineToAllModels(OutlineFriendlyMaterial);
-        break;
-    case EUnitHighlight::Enemy:
-        ApplyOutlineToAllModels(OutlineEnemyMaterial);
-        break;
-    default:
-        ApplyOutlineToAllModels(nullptr);
-        break;
+    case EUnitHighlight::Friendly:       ApplyOutlineToAllModels(OutlineFriendlyMaterial);        break;
+    case EUnitHighlight::Enemy:          ApplyOutlineToAllModels(OutlineEnemyMaterial);           break;
+    case EUnitHighlight::PotentialEnemy: ApplyOutlineToAllModels(OutlinePotentialEnemyMaterial);  break;
+    default:                              ApplyOutlineToAllModels(nullptr);                       break;
     }
 }
 

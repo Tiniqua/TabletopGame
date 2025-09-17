@@ -143,25 +143,37 @@ void UTurnContextWidget::UpdateActionPoints()
 {
     if (!APText) return;
 
+    AMatchGameState* S = GS();
     AMatchPlayerController* P = MPC();
     AUnitBase* Sel = P ? P->SelectedUnit : nullptr;
+
     if (!Sel) { APText->SetText(FText::GetEmpty()); return; }
 
     const auto* APComp = Sel->FindComponentByClass<UUnitActionResourceComponent>();
     if (!APComp) { APText->SetText(FText::GetEmpty()); return; }
 
-    const int32 Debt = Sel->NextPhaseAPDebt;     // replicated on unit
+    const bool bBattle = (S && S->Phase == EMatchPhase::Battle);
+    const ETurnPhase Ph = bBattle ? S->TurnPhase : ETurnPhase::Move;
+
+    // “Free shot” visual hint if Assault+Advanced in Shoot phase
+    bool bFreeShotNow = false;
+    if (Ph == ETurnPhase::Shoot && Sel->bAdvancedThisTurn)
+    {
+        const bool bAssault = UWeaponKeywordHelpers::HasKeyword(Sel->GetActiveWeaponProfile(), EWeaponKeyword::Assault);
+        bFreeShotNow = bAssault;
+    }
+
+    const int32 Debt = Sel->NextPhaseAPDebt;
+
+    FString Line = FString::Printf(TEXT("AP: %d / %d"), APComp->CurrentAP, APComp->MaxAP);
+
     if (Debt > 0)
-    {
-        APText->SetText(FText::FromString(
-            FString::Printf(TEXT("AP: %d / %d   (−%d next phase)"),
-                APComp->CurrentAP, APComp->MaxAP, Debt)));
-    }
-    else
-    {
-        APText->SetText(FText::FromString(
-            FString::Printf(TEXT("AP: %d / %d"), APComp->CurrentAP, APComp->MaxAP)));
-    }
+        Line += FString::Printf(TEXT("   (−%d next phase)"), Debt);
+
+    if (bFreeShotNow)
+        Line += TEXT("   (Shoot is free)");
+
+    APText->SetText(FText::FromString(Line));
 }
 
 void UTurnContextWidget::RebuildActionButtons(AUnitBase* Sel)

@@ -132,9 +132,7 @@ void ULobbyWidget::NativeConstruct()
     if (P1ReadyBtn)   P1ReadyBtn->OnClicked.AddDynamic(this, &ULobbyWidget::OnP1ReadyClicked);
     if (P2ReadyBtn)   P2ReadyBtn->OnClicked.AddDynamic(this, &ULobbyWidget::OnP2ReadyClicked);
     if (BothReady)    BothReady->OnClicked.AddDynamic(this, &ULobbyWidget::OnBothReadyClicked);
-    if (InviteButton) InviteButton->OnClicked.AddDynamic(this, &ULobbyWidget::OnInviteClicked);
-
-
+    
     // Names should be read-only (UI just displays)
     if (P1Name) P1Name->SetIsReadOnly(true);
     if (P2Name) P2Name->SetIsReadOnly(true);
@@ -165,11 +163,6 @@ void ULobbyWidget::NativeDestruct()
     Super::NativeDestruct();
 }
 
-void ULobbyWidget::OnInviteClicked()
-{
-    ShowSteamInviteUI();
-}
-
 void ULobbyWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 {
     Super::NativeTick(MyGeometry, InDeltaTime);
@@ -184,33 +177,6 @@ ASetupGameState* ULobbyWidget::GetSetupGS() const
 ASetupPlayerController* ULobbyWidget::GetSetupPC() const
 {
     return GetOwningPlayer<ASetupPlayerController>();
-}
-
-void ULobbyWidget::ShowSteamInviteUI()
-{
-    ASetupGameState* S = GetSetupGS();
-    ASetupPlayerController* PC = GetSetupPC();
-    if (!S || !PC || !PC->IsLocalController()) return;
-
-    // Host-only guard (compare UniqueNetIds for robustness)
-    auto SameNetId = [](const APlayerState* A, const APlayerState* B)
-    {
-        if (!A || !B) return false;
-        const auto& IdA = A->GetUniqueId();
-        const auto& IdB = B->GetUniqueId();
-        return IdA.IsValid() && IdB.IsValid() && (*IdA == *IdB);
-    };
-    const bool bLocalIsHost = SameNetId(PC->PlayerState, S->Player1);
-    if (!bLocalIsHost) return;
-
-    if (IOnlineSubsystem* OSS = IOnlineSubsystem::Get())
-    {
-        if (IOnlineExternalUIPtr Ext = OSS->GetExternalUIInterface())
-        {
-            // Local user 0, default session name
-            Ext->ShowInviteUI(0, NAME_GameSession);
-        }
-    }
 }
 
 void ULobbyWidget::RefreshFromState()

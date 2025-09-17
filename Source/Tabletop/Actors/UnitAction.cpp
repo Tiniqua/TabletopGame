@@ -112,16 +112,8 @@ bool UAction_Shoot::CanExecute_Implementation(AUnitBase* Unit, const FActionRunt
 
 	// Per-action checks
 	if (!Args.InstigatorPC) return false;
-	if (Unit->bHasShot)     return false;
-
-	// AP path OR Assault+Advanced free path
-	const bool bHasAssault = UWeaponKeywordHelpers::HasKeyword(Unit->GetActiveWeaponProfile(), EWeaponKeyword::Assault);
-	if (bHasAssault && Unit->bAdvancedThisTurn)
-	{
-		// Allowed even if no AP
-		return true;
-	}
-
+	//if (Unit->bHasShot)     return false; // TODO - RE-ENABLE IF WE WANT MAX 1 SHOOT PER TURN, FOR NOW WE KEEP IT OPEN FOR COOL SCENARIOS
+	
 	// Otherwise require enough AP
 	const UUnitActionResourceComponent* AP = Unit->FindComponentByClass<UUnitActionResourceComponent>();
 	return (AP && AP->CanPay(Desc.Cost));
@@ -130,15 +122,16 @@ bool UAction_Shoot::CanExecute_Implementation(AUnitBase* Unit, const FActionRunt
 void UAction_Shoot::Execute_Implementation(AUnitBase* Unit, const FActionRuntimeArgs& Args)
 {
 	if (!Unit || !Args.InstigatorPC) return;
+	
+	// TODO - IF WE WANT TO MAKE ASSAULT WEAPONS SHOOT FOR FREE
+	//const bool bHasAssault = UWeaponKeywordHelpers::HasKeyword(Unit->GetActiveWeaponProfile(), EWeaponKeyword::Assault);
+	//const bool bFreeThisShot = (bHasAssault && Unit->bAdvancedThisTurn);
+	// if (!bFreeThisShot)
+	// {
+	// 	if (!PayAP(Unit)) return; // server-side charge; fails safely if short
+	// }
 
-	const bool bHasAssault = UWeaponKeywordHelpers::HasKeyword(Unit->GetActiveWeaponProfile(), EWeaponKeyword::Assault);
-	const bool bFreeThisShot = (bHasAssault && Unit->bAdvancedThisTurn);
-
-	// Only pay AP if not free-by-Assault
-	if (!bFreeThisShot)
-	{
-		if (!PayAP(Unit)) return; // server-side charge; fails safely if short
-	}
+	if (!PayAP(Unit)) return; // server-side charge; fails safely if short
 
 	// Require target here (or enter target mode elsewhere)
 	if (!Args.TargetUnit) return;

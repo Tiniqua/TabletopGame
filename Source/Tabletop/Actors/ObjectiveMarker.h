@@ -40,6 +40,11 @@ public:
 	UPROPERTY(EditAnywhere, Category="Objective|Debug")
 	bool bDrawDebug = true;
 
+
+	/** Null if no controller or contested tie for max OC. */
+	UPROPERTY(ReplicatedUsing=OnRep_ControlPS)
+	APlayerState* ControllingPS = nullptr;
+	
 	// ---- Queries / API ----
 
 	/** Server: recompute contestants and controlling PS from current unit positions. */
@@ -84,9 +89,7 @@ private:
 	UPROPERTY(ReplicatedUsing=OnRep_Contestants)
 	TArray<FObjectiveContestant> Contestants;
 
-	/** Null if no controller or contested tie for max OC. */
-	UPROPERTY(ReplicatedUsing=OnRep_ControlPS)
-	APlayerState* ControllingPS = nullptr;
+	
 
 	UFUNCTION()
 	void OnRep_Contestants() {}

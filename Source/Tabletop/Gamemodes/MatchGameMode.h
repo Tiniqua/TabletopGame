@@ -209,6 +209,14 @@ public:
 	UFUNCTION(NetMulticast, Unreliable)
 	void Multicast_DrawSphere(const FVector& Center, float Radius, int32 Segments, FColor Color, float Time = 5.f, float Thickness = 2.f);
 
+	UFUNCTION(NetMulticast, Unreliable)
+	void Multicast_SetPotentialTargets(const TArray<AUnitBase*>& NewPotentials);
+
+	UFUNCTION(NetMulticast, Unreliable)
+	void Multicast_ClearPotentialTargets();
+
+	UPROPERTY(Transient)
+	TArray<TWeakObjectPtr<AUnitBase>> LastPotentialApplied;
 };
 
 UCLASS()
@@ -239,7 +247,8 @@ public:
 	
 	void FinalizePlayerJoin(APlayerController* PC);
 	void TallyObjectives_EndOfRound();
-	void ResetAPForTurnOwner(UWorld* W, APlayerState* TurnOwner, EActionPoolScope Scope);
+
+	void BroadcastPotentialTargets(AUnitBase* Attacker);
 
 	void ResolveMoveToBudget(const AUnitBase* U, const FVector& WantedDest, FVector& OutFinalDest, float& OutSpentTTIn,
 	                         bool& bOutClamped) const;

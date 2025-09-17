@@ -51,6 +51,47 @@ namespace
     }
 }
 
+static void BuildImpactSites_Server(const AUnitBase* Attacker, const AUnitBase* Target, TArray<FImpactSite>& OutSites)
+{
+    OutSites.Reset();
+    if (!Attacker || !Target) return;
+
+    // Pre-read muzzle positions once for better "incoming" directions
+    TArray<FVector> Muzzles;
+    for (int32 i = 0; i < Attacker->ModelMeshes.Num(); ++i)
+        if (UStaticMeshComponent* C = Attacker->ModelMeshes[i])
+            Muzzles.Add(Attacker->GetMuzzleTransform(i).GetLocation());
+
+    auto NearestMuzzleTo = [&Muzzles](const FVector& P)->FVector
+    {
+        int32 BestIdx = 0; float BestD2 = TNumericLimits<float>::Max();
+        for (int32 i=0;i<Muzzles.Num();++i)
+        {
+            const float D2 = FVector::DistSquared(Muzzles[i], P);
+            if (D2 < BestD2) { BestD2 = D2; BestIdx = i; }
+        }
+        return (Muzzles.IsValidIndex(BestIdx) ? Muzzles[BestIdx] : P + FVector(100,0,0));
+    };
+
+    for (int32 j = 0; j < Target->ModelMeshes.Num(); ++j)
+    {
+        UStaticMeshComponent* TC = Target->ModelMeshes[j];
+        if (!IsValid(TC)) continue;
+
+        FVector ImpactLoc;
+        if (TC->DoesSocketExist(Target->ImpactSocketName))
+            ImpactLoc = TC->GetSocketTransform(Target->ImpactSocketName, ERelativeTransformSpace::RTS_World).GetLocation();
+        else
+            ImpactLoc = TC->GetComponentTransform().TransformPosition(Target->ImpactOffsetLocal);
+
+        const FVector From = NearestMuzzleTo(ImpactLoc);
+        FImpactSite S;
+        S.Loc = ImpactLoc;
+        S.Rot = (From - ImpactLoc).Rotation(); // incoming (target -> shooter)
+        OutSites.Add(S);
+    }
+}
+
 static UAbilityEventSubsystem* AbilityBus(UWorld* W)
 {
     if (!W) return nullptr;
@@ -178,6 +219,38 @@ void AMatchGameState::Multicast_DrawSphere_Implementation(const FVector& Center,
     Ring(FVector::UpVector,    FVector::ForwardVector); // YZ
 }
 
+void AMatchGameState::Multicast_SetPotentialTargets_Implementation(const TArray<AUnitBase*>& NewPotentials)
+{
+    // Clear old potentials
+    for (TWeakObjectPtr<AUnitBase>& WeakU : LastPotentialApplied)
+        if (WeakU.IsValid()) WeakU->SetHighlightLocal(EUnitHighlight::None);
+    LastPotentialApplied.Reset();
+
+    // Apply new
+    for (AUnitBase* U : NewPotentials)
+    {
+        if (IsValid(U) && U != TargetUnitGlobal)
+            U->SetHighlightLocal(EUnitHighlight::PotentialEnemy);
+        LastPotentialApplied.Add(U);
+    }
+}
+
+void AMatchGameState::Multicast_ClearPotentialTargets_Implementation()
+{
+    for (TWeakObjectPtr<AUnitBase>& WeakU : LastPotentialApplied)
+    {
+        if (!WeakU.IsValid()) continue;
+
+        AUnitBase* U = WeakU.Get();
+        // Don’t stomp live highlights
+        if (U == SelectedUnitGlobal) continue;
+        if (U == TargetUnitGlobal)   continue;
+
+        U->SetHighlightLocal(EUnitHighlight::None);
+    }
+    LastPotentialApplied.Reset();
+}
+
 void AMatchGameState::BeginPlay()
 {
     Super::BeginPlay();
@@ -251,21 +324,48 @@ void AMatchGameState::Multicast_ApplySelectionVis_Implementation(AUnitBase* NewS
 void AMatchGameState::SetGlobalSelected(AUnitBase* NewSel)
 {
     if (!HasAuthority()) return;
-    if (SelectedUnitGlobal == NewSel) return;
 
+    // Only allow selecting your own unit, and only during Battle
+    if (!NewSel || Phase != EMatchPhase::Battle || !CurrentTurn || NewSel->OwningPS != CurrentTurn)
+    {
+        NewSel = nullptr;
+    }
+
+    if (SelectedUnitGlobal == NewSel) return;
     SelectedUnitGlobal = NewSel;
-    
-    // Apply immediately to everyone (host included)
+
     Multicast_ApplySelectionVis(SelectedUnitGlobal, TargetUnitGlobal);
     ForceNetUpdate();
+
+    // Potential targets only make sense if we have a valid attacker in Shoot
+    if (Phase == EMatchPhase::Battle && TurnPhase == ETurnPhase::Shoot && SelectedUnitGlobal)
+    {
+        if (AMatchGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<AMatchGameMode>() : nullptr)
+            GM->BroadcastPotentialTargets(SelectedUnitGlobal);
+    }
+    else
+    {
+        Multicast_ClearPotentialTargets();
+    }
 }
 
 void AMatchGameState::SetGlobalTarget(AUnitBase* NewTgt)
 {
     if (!HasAuthority()) return;
-    if (TargetUnitGlobal == NewTgt) return;
 
+    const bool bAllow =
+        (Phase == EMatchPhase::Battle) &&
+        (TurnPhase == ETurnPhase::Shoot) &&
+        SelectedUnitGlobal &&
+        (SelectedUnitGlobal->OwningPS == CurrentTurn) &&
+        NewTgt &&
+        SelectedUnitGlobal->IsEnemy(NewTgt);
+
+    if (!bAllow) NewTgt = nullptr;
+
+    if (TargetUnitGlobal == NewTgt) return;
     TargetUnitGlobal = NewTgt;
+
     Multicast_ApplySelectionVis(SelectedUnitGlobal, TargetUnitGlobal);
     ForceNetUpdate();
 }
@@ -307,6 +407,32 @@ static inline const TCHAR* CoverTypeToText(ECoverType C)
     switch (C) { case ECoverType::Low: return TEXT("in cover (low)");
     case ECoverType::High:return TEXT("in cover (high)");
     default:               return TEXT("no cover"); }
+}
+
+void AMatchGameMode::BroadcastPotentialTargets(AUnitBase* Attacker)
+{
+    if (!HasAuthority() || !Attacker) return;
+    AMatchGameState* S = GS(); if (!S) return;
+    if (S->Phase != EMatchPhase::Battle || S->TurnPhase != ETurnPhase::Shoot) { S->Multicast_ClearPotentialTargets(); return; }
+
+    // Only show for the active player’s selected attacker
+    if (Attacker->OwningPS != S->CurrentTurn) { S->Multicast_ClearPotentialTargets(); return; }
+
+    TArray<AUnitBase*> Potentials;
+    for (TActorIterator<AUnitBase> It(GetWorld()); It; ++It)
+    {
+        AUnitBase* T = *It;
+        if (!T || T == Attacker) continue;
+        if (!Attacker->IsEnemy(T)) continue;
+
+        // Reuse your existing shoot gate (range, alive, not same owner, etc.)
+        if (ValidateShoot(Attacker, T))
+        {
+            Potentials.Add(T);
+        }
+    }
+
+    S->Multicast_SetPotentialTargets(Potentials);
 }
 
 void AMatchGameMode::ResolveMoveToBudget(
@@ -438,7 +564,6 @@ bool AMatchGameMode::ValidateShoot(AUnitBase* A, AUnitBase* T) const
     if (!A || !T || A==T) return false;
     if (A->ModelsCurrent <= 0 || T->ModelsCurrent <= 0) return false;
     if (A->OwningPS == T->OwningPS) return false;
-    if (A->bHasShot) return false;
 
     const float distTT = FVector::Dist(A->GetActorLocation(), T->GetActorLocation()) / CmPerTabletopInch();
     const float rngTT  = A->GetWeaponRange(); // stored as tabletop inches
@@ -471,6 +596,11 @@ void AMatchGameMode::Handle_SelectTarget(AMatchPlayerController* PC, AUnitBase* 
 
         S->SetGlobalTarget(nullptr);
 
+        if (S->TurnPhase == ETurnPhase::Shoot)
+            BroadcastPotentialTargets(Attacker);
+        else
+            S->Multicast_ClearPotentialTargets();
+        
         // Optional facing
         Attacker->FaceNearestEnemyInstant();
 
@@ -496,6 +626,7 @@ void AMatchGameMode::Handle_SelectTarget(AMatchPlayerController* PC, AUnitBase* 
 
     Attacker->FaceActorInstant(Target);
 
+    S->Multicast_ClearPotentialTargets();
     S->SetGlobalTarget(Target);
 
     S->OnDeploymentChanged.Broadcast();
@@ -755,9 +886,16 @@ void AMatchGameMode::Handle_ConfirmShoot(AMatchPlayerController* PC, AUnitBase* 
         FinalDamage);
 
     const float ImpactDelay = Attacker->ImpactDelaySeconds;
-    Attacker->Multicast_PlayMuzzleAndImpactFX_AllModels(Target, ImpactDelay);
 
-    // Schedule *final* damage (after FNP)
+    // Cache target center & per-model sites NOW (before we apply damage)
+    TArray<FImpactSite> Sites;
+    BuildImpactSites_Server(Attacker, Target, Sites);
+    const FVector TargetCenter = Target->GetActorLocation();
+
+    // Tell everyone to play muzzle now and impacts later using cached sites
+    Attacker->Multicast_PlayMuzzleAndImpactFX_AllModels_WithSites(TargetCenter, Sites, ImpactDelay);
+
+    // Schedule damage after the same delay (unchanged)
     FTimerDelegate Del;
     Del.BindUFunction(this, FName("ApplyDelayedDamageAndReport"),
                       Attacker, Target, FinalDamage, Mid, Msg);
@@ -1016,6 +1154,8 @@ void AMatchGameMode::Handle_CancelPreview(AMatchPlayerController* PC, AUnitBase*
     AMatchGameState* S = GS();
     if (!S || S->Phase != EMatchPhase::Battle) return;
 
+   
+
     if (PC->PlayerState != S->CurrentTurn) return;
     if (Attacker->OwningPS != PC->PlayerState) return;
 
@@ -1026,6 +1166,7 @@ void AMatchGameMode::Handle_CancelPreview(AMatchPlayerController* PC, AUnitBase*
         S->Preview.Phase    = S->TurnPhase;
         
         S->SetGlobalTarget(nullptr);
+        S->Multicast_ClearPotentialTargets();
         S->OnDeploymentChanged.Broadcast();
         S->ForceNetUpdate();
     }
@@ -1282,20 +1423,28 @@ void AMatchGameMode::HandleStartBattle(APlayerController* PC)
         if (PC->PlayerState != S->P1) return;
         if (!S->bDeploymentComplete)  return;
 
-        S->Phase      = EMatchPhase::Battle;
+        S->Phase       = EMatchPhase::Battle;
         S->CurrentRound= 1;
         S->MaxRounds   = 5;
         S->TurnInRound = 0;
         S->TurnPhase   = ETurnPhase::Move;
 
-        // ✅ Set the turn owner first
         S->CurrentTurn = S->CurrentDeployer;
 
-        // Reset unit move/shot flags etc. for the new turn owner
         ResetUnitRoundStateFor(S->CurrentTurn);
 
-        // ✅ Now give AP for the phase owner
-        ResetAPForTurnOwner(GetWorld(), S->CurrentTurn, EActionPoolScope::PerPhase);
+        S->SetGlobalSelected(nullptr);
+        S->SetGlobalTarget(nullptr);
+        S->Multicast_ClearPotentialTargets();
+
+        // Recalc objectives ONCE, then award Move-phase AP (with Round1/Move guard inside unit)
+        for (TActorIterator<AObjectiveMarker> It(GetWorld()); It; ++It)
+            if (AObjectiveMarker* Obj = *It) Obj->RecalculateControl();
+
+        for (TActorIterator<AUnitBase> It(GetWorld()); It; ++It)
+            if (AUnitBase* U = *It)
+                if (U->OwningPS == S->CurrentTurn)
+                    U->ApplyAPPhaseStart(ETurnPhase::Move);
 
         S->OnDeploymentChanged.Broadcast();
         S->ForceNetUpdate();
@@ -1306,7 +1455,6 @@ void AMatchGameMode::HandleStartBattle(APlayerController* PC)
     }
 }
 
-
 void AMatchGameMode::HandleEndPhase(APlayerController* PC)
 {
     if (!HasAuthority() || !PC) return;
@@ -1314,20 +1462,35 @@ void AMatchGameMode::HandleEndPhase(APlayerController* PC)
     if (!S || S->Phase != EMatchPhase::Battle) return;
     if (PC->PlayerState != S->CurrentTurn) return;
 
-    auto Broadcast = [&]()
+    S->SetGlobalSelected(nullptr);
+    S->SetGlobalTarget(nullptr);
+    S->Multicast_ClearPotentialTargets();
+
+    auto ApplyPhaseStartAP = [&](APlayerState* TurnOwner, ETurnPhase NewPhase)
     {
-        S->OnDeploymentChanged.Broadcast();
-        S->ForceNetUpdate();
+        // 1) Refresh objective controllers once
+        for (TActorIterator<AObjectiveMarker> It(GetWorld()); It; ++It)
+            if (AObjectiveMarker* Obj = *It) Obj->RecalculateControl();
+
+        // 2) Apply per-unit AP start logic
+        for (TActorIterator<AUnitBase> It(GetWorld()); It; ++It)
+        {
+            AUnitBase* U = *It;
+            if (!U || U->OwningPS != TurnOwner) continue;
+            U->ApplyAPPhaseStart(NewPhase);
+        }
     };
 
     if (S->TurnPhase == ETurnPhase::Move)
     {
         S->TurnPhase = ETurnPhase::Shoot;
-        ResetAPForTurnOwner(GetWorld(), S->CurrentTurn, EActionPoolScope::PerPhase);
-        Broadcast();
+        ApplyPhaseStartAP(S->CurrentTurn, ETurnPhase::Shoot);
+        S->OnDeploymentChanged.Broadcast();
+        S->ForceNetUpdate();
         return;
     }
 
+    // Swap player or advance round, as you already do…
     if (S->TurnInRound == 0)
     {
         S->TurnInRound = 1;
@@ -1335,9 +1498,10 @@ void AMatchGameMode::HandleEndPhase(APlayerController* PC)
         S->TurnPhase   = ETurnPhase::Move;
 
         ResetUnitRoundStateFor(S->CurrentTurn);
-        ResetAPForTurnOwner(GetWorld(), S->CurrentTurn, EActionPoolScope::PerPhase);
+        ApplyPhaseStartAP(S->CurrentTurn, ETurnPhase::Move);
 
-        Broadcast();
+        S->OnDeploymentChanged.Broadcast();
+        S->ForceNetUpdate();
         return;
     }
 
@@ -1363,8 +1527,16 @@ void AMatchGameMode::HandleEndPhase(APlayerController* PC)
     // Otherwise continue normally
     S->CurrentTurn = OtherPlayer(S->CurrentTurn);
     S->TurnPhase   = ETurnPhase::Move;
+    
     ResetUnitRoundStateFor(S->CurrentTurn);
-    Broadcast();
+    ApplyPhaseStartAP(S->CurrentTurn, ETurnPhase::Move);
+
+    S->SetGlobalSelected(nullptr);
+    S->SetGlobalTarget(nullptr);
+    S->Multicast_ClearPotentialTargets();
+
+    S->OnDeploymentChanged.Broadcast();
+    S->ForceNetUpdate();
 }
 
 void AMatchGameMode::ScoreObjectivesForRound()
@@ -1584,44 +1756,6 @@ void AMatchGameMode::TallyObjectives_EndOfRound()
     GS->ScoreP2 += RoundP2;
 
     GS->OnDeploymentChanged.Broadcast();
-}
-
-void AMatchGameMode::ResetAPForTurnOwner(UWorld* W, APlayerState* TurnOwner, EActionPoolScope Scope)
-{
-    if (!W || !TurnOwner) return;
-
-    for (TActorIterator<AUnitBase> It(W); It; ++It)
-    {
-        AUnitBase* U = *It;
-        if (!U || U->OwningPS != TurnOwner) continue;
-
-        if (auto* AP = U->FindComponentByClass<UUnitActionResourceComponent>())
-        {
-            // 1) Reset the AP pool for this phase/turn
-            if (Scope == EActionPoolScope::PerTurn) AP->ResetForTurn();
-            else AP->ResetForPhase();
-
-            // 2) Apply any deferred debt
-            if (U->NextPhaseAPDebt > 0)
-            {
-                const int32 Applied = FMath::Min(AP->CurrentAP, U->NextPhaseAPDebt);
-                AP->CurrentAP       = AP->CurrentAP - Applied;
-                U->NextPhaseAPDebt  = U->NextPhaseAPDebt - Applied;
-
-#if !(UE_BUILD_SHIPPING)
-                if (GEngine)
-                {
-                    GEngine->AddOnScreenDebugMessage(
-                        -1, 2.f, FColor::Cyan,
-                        FString::Printf(TEXT("[Debt] Applied %d AP debt to %s (AP=%d/%d, RemainderDebt=%d)"),
-                            Applied, *U->GetName(), AP->CurrentAP, AP->MaxAP, U->NextPhaseAPDebt));
-                }
-#endif
-            }
-
-            U->ForceNetUpdate();
-        }
-    }
 }
 
 void AMatchGameMode::Handle_ExecuteAction(AMatchPlayerController* PC, AUnitBase* Unit, FName ActionId, const FActionRuntimeArgs& Args)

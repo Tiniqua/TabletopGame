@@ -20,7 +20,16 @@ enum class EUnitHighlight : uint8
 {
     None      UMETA(DisplayName="None"),
     Friendly  UMETA(DisplayName="Friendly"),
-    Enemy     UMETA(DisplayName="Enemy")
+    Enemy     UMETA(DisplayName="Enemy"),
+    PotentialEnemy   UMETA(DisplayName="Potential")
+};
+
+USTRUCT()
+struct FImpactSite
+{
+    GENERATED_BODY()
+    FVector  Loc = FVector::ZeroVector;
+    FRotator Rot = FRotator::ZeroRotator;
 };
 
 USTRUCT()
@@ -247,13 +256,16 @@ public:
     FTimerHandle ImpactFXTimerHandle;
 
     UFUNCTION(NetMulticast, Unreliable)
-    void Multicast_PlayMuzzleAndImpactFX_AllModels(class AUnitBase* TargetUnit, float DelaySeconds);
+    void Multicast_PlayMuzzleAndImpactFX_AllModels_WithSites(const FVector& TargetCenter, const TArray<FImpactSite>& Sites, float DelaySeconds);
     
     UFUNCTION()
     void PlayImpactFXAndSounds_Delayed(AUnitBase* TargetUnit);
 
     UFUNCTION(BlueprintPure, Category="VFX")
     FTransform GetMuzzleTransform(int32 ModelIndex) const;
+
+    UFUNCTION()
+    void ApplyAPPhaseStart(ETurnPhase Phase);
 
     UPROPERTY(EditDefaultsOnly, Category="Selection")
     TEnumAsByte<ECollisionChannel> SelectionTraceECC = ECC_GameTraceChannel2;
@@ -306,6 +318,8 @@ protected:
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Selection|Outline")
     UMaterialInterface* OutlineEnemyMaterial = nullptr;
 
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Selection|Outline")
+    UMaterialInterface* OutlinePotentialEnemyMaterial = nullptr;
     
 
 private:
