@@ -1,16 +1,13 @@
-// UnitRowWidget.cpp
-#include "UnitRowWidget.h"
-
-#include "UnitSelectionWidget.h"
+﻿// WeaponLoadoutRowWidget.cpp
 #include "WeaponLoadoutRowWidget.h"
+#include "UnitRowWidget.h" // for UIFormat helpers
 #include "Actors/UnitAbility.h"
 #include "Components/TextBlock.h"
-#include "Components/PanelWidget.h"
-#include "Controllers/SetupPlayerController.h"
-#include "WeaponKeywordHelpers.h"
+#include "Components/Button.h"
 #include "Gamemodes/SetupGamemode.h"
+#include "Controllers/SetupPlayerController.h"
 
-namespace UIFormat
+namespace UIFormatForWeapon
 {
 	inline FString AbilityClassToDisplay(TSubclassOf<class UUnitAbility> C)
 	{
@@ -151,100 +148,89 @@ namespace UIFormat
 }
 
 
-ASetupGameState* UUnitRowWidget::GS() const { return GetWorld()? GetWorld()->GetGameState<ASetupGameState>() : nullptr; }
+ASetupGameState* UWeaponLoadoutRowWidget::GS() const { return GetWorld()? GetWorld()->GetGameState<ASetupGameState>() : nullptr; }
+ASetupPlayerController* UWeaponLoadoutRowWidget::PC() const { return GetOwningPlayer<ASetupPlayerController>(); }
 
-bool UUnitRowWidget::IsLocalP1() const
+void UWeaponLoadoutRowWidget::Init(FName InUnitId, int32 InWeaponIndex, const FWeaponProfile& W)
 {
-	if (const ASetupGameState* S = GS())
-		if (const APlayerController* PC = GetOwningPlayer())
-			return PC->PlayerState == S->Player1;
-	return true;
+	UnitId = InUnitId;
+	WeaponIndex = InWeaponIndex;
+	CachedWeapon = W;
+
+	if (WL_NameText)      WL_NameText     ->SetText(FText::FromName(W.WeaponId));
+	if (WL_StatsText)     WL_StatsText    ->SetText(FText::FromString(FormatWeaponStats(W)));
+	if (WL_KeywordsText)  WL_KeywordsText ->SetText(FText::FromString(UIFormatForWeapon::FormatKeywords(W.Keywords)));
+	if (WL_AbilitiesText) WL_AbilitiesText->SetText(FText::FromString(UIFormatForWeapon::FormatAbilities(W.AbilityClasses)));
+
+	// If you want per-loadout points, set them here (or reuse unit points)
+	if (WL_PointsText)
+	{
+		// Replace with per-loadout cost if you have it; using 0 or unit cost as placeholder:
+		WL_PointsText->SetText(FText::GetEmpty());
+	}
+
+	RefreshFromState();
 }
 
-void UUnitRowWidget::InitFull(FName InRowName, const FUnitRow& Row)
-{
-	CachedRow   = Row;
-	UnitId      = InRowName; 
-	UnitPoints  = Row.Points;
-
-	if (NameText)          NameText->SetText(Row.DisplayName);
-	if (PointsText)        PointsText->SetText(FText::AsNumber(UnitPoints));
-	if (UnitStatsText)     UnitStatsText->SetText(FText::FromString(FormatUnitStats(Row)));
-	if (UnitAbilitiesText) UnitAbilitiesText->SetText(FText::FromString(UIFormat::FormatAbilities(Row.AbilityClasses)));
-
-	RebuildLoadouts();
-	RefreshHeader();
-}
-
-void UUnitRowWidget::NativeConstruct()
+void UWeaponLoadoutRowWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
+	if (WL_MinusBtn) WL_MinusBtn->OnClicked.AddDynamic(this, &UWeaponLoadoutRowWidget::HandleMinus);
+	if (WL_PlusBtn)  WL_PlusBtn ->OnClicked.AddDynamic(this, &UWeaponLoadoutRowWidget::HandlePlus);
 
 	if (ASetupGameState* S = GS())
-	{
-		S->OnRosterChanged.AddDynamic(this, &UUnitRowWidget::HandleRosterChanged);
-	}
-	UE_LOG(LogTemp, Warning, TEXT("[UnitRow] Construct %p  UnitId=%s  USel=%s"),
-			this, *UnitId.ToString(),
-			*GetNameSafe(GetTypedOuter<UUnitSelectionWidget>()));
-	
-	RefreshHeader();
+		S->OnRosterChanged.AddDynamic(this, &UWeaponLoadoutRowWidget::HandleRosterChanged);
+
+	UE_LOG(LogTemp, Warning, TEXT("[LoadoutRow] Construct %p  UnitId=%s  WIdx=%d  Parent=%s"),
+		this, *UnitId.ToString(), WeaponIndex, *GetNameSafe(GetParent()));
 }
 
-void UUnitRowWidget::NativeDestruct()
+void UWeaponLoadoutRowWidget::NativeDestruct()
 {
 	if (ASetupGameState* S = GS())
-	{
-		S->OnRosterChanged.RemoveDynamic(this, &UUnitRowWidget::HandleRosterChanged);
-	}
-	
+		S->OnRosterChanged.RemoveDynamic(this, &UWeaponLoadoutRowWidget::HandleRosterChanged);
 	Super::NativeDestruct();
 }
 
-void UUnitRowWidget::HandleRosterChanged()
+void UWeaponLoadoutRowWidget::HandleMinus()
 {
-	RefreshHeader();
-
-	if (LoadoutsList)
-	{
-		for (int32 i=0; i<LoadoutsList->GetChildrenCount(); ++i)
-			if (auto* C = Cast<UWeaponLoadoutRowWidget>(LoadoutsList->GetChildAt(i)))
-				C->RefreshFromState();
-	}
+	const int32 Curr = GetLocalSeatCount();
+	if (Curr > 0) SendCountToServer(Curr - 1);
 }
 
-void UUnitRowWidget::RefreshHeader()
+void UWeaponLoadoutRowWidget::HandlePlus()
 {
-	if (!CountText) return;
+	const int32 Curr = GetLocalSeatCount();
+	SendCountToServer(Curr + 1);
+}
+
+void UWeaponLoadoutRowWidget::HandleRosterChanged()
+{
+	RefreshFromState();
+}
+
+void UWeaponLoadoutRowWidget::RefreshFromState()
+{
+	if (WL_CountText)
+		WL_CountText->SetText(FText::AsNumber(FMath::Max(0, GetLocalSeatCount())));
+}
+
+int32 UWeaponLoadoutRowWidget::GetLocalSeatCount() const
+{
 	if (const ASetupGameState* S = GS())
-		CountText->SetText(FText::AsNumber(S->GetTotalCountFor(UnitId, IsLocalP1())));
+		if (const ASetupPlayerController* LPC = PC())
+			return S->GetCountFor(UnitId, WeaponIndex, LPC->PlayerState == S->Player1);
+	return 0;
 }
 
-void UUnitRowWidget::RebuildLoadouts()
+void UWeaponLoadoutRowWidget::SendCountToServer(int32 NewCount) const
 {
-	if (!LoadoutsList || !LoadoutRowClass) return;
-	LoadoutsList->ClearChildren();
-
-	for (int32 i=0; i<CachedRow.Weapons.Num(); ++i)
-	{
-		const FWeaponProfile& W = CachedRow.Weapons[i];
-		if (auto* Row = CreateWidget<UWeaponLoadoutRowWidget>(GetOwningPlayer(), LoadoutRowClass))
-		{
-			Row->Init(UnitId, i, W);
-			LoadoutsList->AddChild(Row);
-		}
-	}
+	if (ASetupPlayerController* LPC = PC())
+		LPC->Server_SetUnitCount(UnitId, WeaponIndex, FMath::Clamp(NewCount, 0, 99));
 }
 
-FString UUnitRowWidget::FormatUnitStats(const FUnitRow& U)
+FString UWeaponLoadoutRowWidget::FormatWeaponStats(const FWeaponProfile& W)
 {
-	const FString Inv = (U.InvulnSave >= 2 && U.InvulnSave <= 6) ? FString::Printf(TEXT("Inv %d++"), U.InvulnSave) : TEXT("");
-	const FString FNP = (U.FeelNoPain >= 2 && U.FeelNoPain <= 6) ? FString::Printf(TEXT("FNP %d++"), U.FeelNoPain) : TEXT("");
-	FString Paren;
-	if (!Inv.IsEmpty() || !FNP.IsEmpty())
-		Paren = FString::Printf(TEXT("  (%s%s%s)"), *Inv, (!Inv.IsEmpty() && !FNP.IsEmpty())?TEXT("  "):TEXT(""), *FNP);
-
-	return FString::Printf(TEXT("M %d\"  T %d  W %d  Sv %d+  OC %d%s"),
-		U.MoveInches, U.Toughness, U.Wounds, U.Save, U.ObjectiveControlPerModel, *Paren);
+	return FString::Printf(TEXT("Rng %d\"  A %d  S %d  AP %d  D %d"),
+		W.RangeInches, W.Attacks, W.Strength, W.AP, W.Damage);
 }
-

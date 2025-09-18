@@ -6,6 +6,18 @@
 #include "Tabletop/MapData.h"
 #include "Tabletop/PlayerStates/TabletopPlayerState.h"
 
+UDataTable* ASetupGameState::GetUnitsDTForSeat(bool bP1) const
+{
+    // If you already have GetUnitsDTForLocalSeat/PlayerState, mirror it here.
+    EFaction F = bP1 ? P1Faction : P2Faction;
+    if (!FactionsTable) return nullptr;
+
+    for (const auto& Pair : FactionsTable->GetRowMap())
+        if (const FFactionRow* Row = reinterpret_cast<const FFactionRow*>(Pair.Value))
+            if (Row->Faction == F) return Row->UnitsTable;
+    return nullptr;
+}
+
 static FString SafeName(APlayerState* PS)
 {
     if (!PS) return FString();
@@ -82,6 +94,58 @@ UDataTable* ASetupGameState::GetUnitsDTForLocalSeat(const APlayerState* LocalSea
     return nullptr;
 }
 
+// SetupGameState.cpp
+int32 ASetupGameState::GetTotalCountFor(FName UnitId, bool bP1) const
+{
+    // Use whatever roster arrays you already keep (example names below)
+    const TArray<FRosterEntry>& R = bP1 ? P1Roster : P2Roster; // adjust to your real fields
+    int32 Sum = 0;
+    for (const FRosterEntry& E : R)
+        if (E.UnitId == UnitId)
+            Sum += FMath::Max(0, E.Count);
+    return Sum;
+}
+
+void ASetupGameState::RecomputePointsAll()
+{
+    RecomputePointsForSeat(true);
+    RecomputePointsForSeat(false);
+}
+
+void ASetupGameState::OnRep_Points() const
+{
+    // Nudge UI to refresh labels when replicated points change.
+    OnRosterChanged.Broadcast(); // you already listen to this in widgets
+}
+
+void ASetupGameState::RecomputePointsForSeat(bool bP1)
+{
+    if (!HasAuthority()) return;
+
+    int32 Total = 0;
+    if (UDataTable* UnitsDT = GetUnitsDTForSeat(bP1))
+    {
+        for (const auto& Pair : UnitsDT->GetRowMap())
+        {
+            const FName UnitId = Pair.Key;
+            if (const FUnitRow* U = reinterpret_cast<const FUnitRow*>(Pair.Value))
+            {
+                // IMPORTANT: total across all loadouts
+                const int32 CountAllLoadouts = GetTotalCountFor(UnitId, bP1); // you already use this in UI
+                Total += (CountAllLoadouts * U->Points);
+            }
+        }
+    }
+
+    if (bP1)
+        P1Points = Total;
+    else
+        P2Points = Total;
+
+    // Optionally auto-clear ready if someone exceeds cap
+    // if (Total > 2000) { if (bP1) bP1Ready=false; else bP2Ready=false; }
+}
+
 int32 ASetupGameState::GetCountFor(FName UnitId, int32 WeaponIndex, bool bP1) const
 {
     const TArray<FRosterEntry>& R = bP1 ? P1Roster : P2Roster;
@@ -95,27 +159,35 @@ void ASetupGameState::SetCountFor(FName UnitId, int32 WeaponIndex, int32 NewCoun
     TArray<FRosterEntry>& R = bP1 ? P1Roster : P2Roster;
     const int32 Clamped = FMath::Clamp(NewCount, 0, 99);
 
-    // find row
     int32 idx = INDEX_NONE;
     for (int32 i=0;i<R.Num();++i)
         if (R[i].UnitId == UnitId && R[i].WeaponIndex == WeaponIndex) { idx = i; break; }
 
-    if (Clamped <= 0)
-    {
-        if (idx != INDEX_NONE) R.RemoveAt(idx);
-    }
+    if (Clamped <= 0) { if (idx != INDEX_NONE) R.RemoveAt(idx); }
     else
     {
-        if (idx == INDEX_NONE) { R.Add({UnitId, WeaponIndex, Clamped}); }
-        else                   { R[idx].Count = Clamped; }
+        if (idx == INDEX_NONE) R.Add({UnitId, WeaponIndex, Clamped});
+        else                   R[idx].Count = Clamped;
     }
 
-    OnRosterChanged.Broadcast();
+    UDataTable* UnitsDT = GetUnitsDTForSeat(bP1);
+    if (!UnitsDT)
+    {
+        UE_LOG(LogTemp, Error, TEXT("[GS] GetUnitsDTForSeat(%s) returned null (Faction=%d, FactionsTable=%s)"),
+            bP1?TEXT("P1"):TEXT("P2"),
+            (int32)(bP1 ? P1Faction : P2Faction),
+            *GetNameSafe(FactionsTable));
+    }
 
-    // recompute points
     const int32 NewPts = GetTotalPoints(bP1);
+    UE_LOG(LogTemp, Warning, TEXT("[GS] New total points (%s) = %d  (RosterSize=%d)"),
+        bP1?TEXT("P1"):TEXT("P2"),
+        NewPts,
+        (bP1?P1Roster:P2Roster).Num());
+
     if (bP1) P1Points = NewPts; else P2Points = NewPts;
-    OnRep_Rosters(); // or broadcast + ForceNetUpdate()
+
+    OnRosterChanged.Broadcast();
     ForceNetUpdate();
 }
 
@@ -158,8 +230,8 @@ void ASetupGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutL
     DOREPLIFETIME(ASetupGameState, FactionsTable);
     DOREPLIFETIME(ASetupGameState, P1Roster);
     DOREPLIFETIME(ASetupGameState, P2Roster);
-    DOREPLIFETIME(ASetupGameState, P1Points);
-    DOREPLIFETIME(ASetupGameState, P2Points);
+    DOREPLIFETIME_CONDITION_NOTIFY(ASetupGameState, P1Points, COND_None, REPNOTIFY_Always);
+    DOREPLIFETIME_CONDITION_NOTIFY(ASetupGameState, P2Points, COND_None, REPNOTIFY_Always);
     DOREPLIFETIME(ASetupGameState, MapsTable);
     DOREPLIFETIME(ASetupGameState, SelectedMapRow);
 }

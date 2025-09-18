@@ -1,6 +1,7 @@
 
 #include "SetupWidget.h"
 
+#include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Components/WidgetSwitcher.h"
 #include "Gamemodes/SetupGamemode.h"
 
@@ -28,6 +29,11 @@ void USetupWidget::NativeConstruct()
 
 		HandlePhaseChanged();
 	}
+
+	TArray<UUserWidget*> Existing;
+	UWidgetBlueprintLibrary::GetAllWidgetsOfClass(this, Existing, StaticClass(), /*TopLevelOnly*/true);
+	for (UUserWidget* W : Existing)
+		if (W && W != this) W->RemoveFromParent();
 }
 
 void USetupWidget::NativeDestruct()

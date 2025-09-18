@@ -1,12 +1,15 @@
-
+// UnitRowWidget.h
 #pragma once
 
 #include "CoreMinimal.h"
+#include "ArmyData.h"
 #include "Blueprint/UserWidget.h"
 #include "UnitRowWidget.generated.h"
 
+// (helpers namespace UIFormat is at the very top of this header; see earlier block)
+
 class UTextBlock;
-class UButton;
+class UPanelWidget;
 
 UCLASS()
 class TABLETOP_API UUnitRowWidget : public UUserWidget
@@ -14,43 +17,42 @@ class TABLETOP_API UUnitRowWidget : public UUserWidget
 	GENERATED_BODY()
 
 public:
-	// Init from parent after CreateWidget
-	void Init(FName InUnitId, const FText& InDisplayName, int32 InUnitPoints);
-
-	UFUNCTION(BlueprintCallable)
-	void OnWeaponChanged(FString Selected, ESelectInfo::Type SelectionType);
+	// New single init path: full data from DT
+	void InitFull(FName InRowName, const FUnitRow& Row);
 
 protected:
 	virtual void NativeConstruct() override;
 	virtual void NativeDestruct() override;
 
-	// BindWidget: create these in your Row BP (NameText, PointsText, CountText, MinusBtn, PlusBtn)
-	UPROPERTY(meta=(BindWidget)) UTextBlock* NameText   = nullptr;
-	UPROPERTY(meta=(BindWidget)) UTextBlock* PointsText = nullptr;
-	UPROPERTY(meta=(BindWidget)) UTextBlock* CountText  = nullptr;
-	UPROPERTY(meta=(BindWidget)) UButton*    MinusBtn   = nullptr;
-	UPROPERTY(meta=(BindWidget)) UButton*    PlusBtn    = nullptr;
+	// Header fields
+	UPROPERTY(meta=(BindWidget)) UTextBlock* NameText         = nullptr;
+	UPROPERTY(meta=(BindWidget)) UTextBlock* PointsText       = nullptr;
+	UPROPERTY(meta=(BindWidget)) UTextBlock* CountText        = nullptr; // total across loadouts
+	UPROPERTY(meta=(BindWidget)) UTextBlock* UnitStatsText    = nullptr;
+	UPROPERTY(meta=(BindWidget)) UTextBlock* UnitAbilitiesText= nullptr;
 
-	UPROPERTY(meta=(BindWidget))
-	class UComboBoxString* WeaponCombo;
-
-	int32 CurrentWeaponIdx = 0;
-	TArray<FName> WeaponDisplay;
+	// Container for loadout rows
+	UPROPERTY(meta=(BindWidget)) UPanelWidget* LoadoutsList   = nullptr;
 
 private:
-	// data
-	FName  UnitId = NAME_None;
-	int32  UnitPoints = 0;
+	// Data
+	FName    UnitId   = NAME_None;
+	int32    UnitPoints = 0;
+	FUnitRow CachedRow;
 
-	// callbacks
-	UFUNCTION() void HandleMinus();
-	UFUNCTION() void HandlePlus();
+	UPROPERTY(EditDefaultsOnly, Category="UI")
+	TSubclassOf<class UWeaponLoadoutRowWidget> LoadoutRowClass;
+
+	// Callbacks
 	UFUNCTION() void HandleRosterChanged();
 
-	// helpers
+	// Helpers
 	class ASetupGameState* GS() const;
-	class ASetupPlayerController* PC() const;
-	int32 GetLocalSeatCount() const;        // read current count from GS (local seat)
-	void  ApplyCountToUI(int32 Count) const;// update CountText
-	void  SendCountToServer(int32 NewCount) const;
+	bool  IsLocalP1() const;
+	void  RebuildLoadouts();
+	void  RefreshHeader();
+
+	// Formatters
+	static FString FormatUnitStats(const FUnitRow& U);
 };
+

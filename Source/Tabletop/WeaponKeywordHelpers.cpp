@@ -1,6 +1,7 @@
 ﻿// WeaponKeywordHelpers.cpp
 #include "WeaponKeywordHelpers.h"
 
+#include "Actors/UnitAbility.h"
 #include "Actors/UnitBase.h"
 #include "Internationalization/Text.h" // NSLOCTEXT
 

@@ -3,6 +3,7 @@
 #include "Interfaces/OnlineIdentityInterface.h"
 #include "OnlineSubsystem.h"
 #include "Blueprint/UserWidget.h"
+#include "Blueprint/WidgetBlueprintLibrary.h"
 #include "GameFramework/PlayerState.h"
 #include "Tabletop/SetupWidget.h"
 #include "Tabletop/Gamemodes/SetupGamemode.h"
@@ -55,19 +56,20 @@ void ASetupPlayerController::BeginPlay()
 
 	if (IsLocalController() && SetupWidgetClass)
 	{
-		SetupWidgetInstance = CreateWidget<USetupWidget>(this, SetupWidgetClass);
-		if (SetupWidgetInstance)
-		{
-			SetupWidgetInstance->AddToViewport();
+		// Prevent duplicates
+		TArray<UUserWidget*> Existing;
+		UWidgetBlueprintLibrary::GetAllWidgetsOfClass(this, Existing, USetupWidget::StaticClass(), /*TopLevelOnly*/ true);
+		for (auto* W : Existing) if (W) W->RemoveFromParent();
 
-			FInputModeGameAndUI Mode;
-			Mode.SetHideCursorDuringCapture(false);
-			Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
-			Mode.SetWidgetToFocus(SetupWidgetInstance->TakeWidget());
-			SetShowMouseCursor(true);
+		USetupWidget* W = CreateWidget<USetupWidget>(this, SetupWidgetClass);
+		if (W)
+		{
+			W->AddToViewport(10);
 			bShowMouseCursor = true;
+			FInputModeGameAndUI Mode;
+			Mode.SetWidgetToFocus(W->TakeWidget());
+			Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
 			SetInputMode(Mode);
-			
 		}
 	}
 
@@ -135,6 +137,12 @@ void ASetupPlayerController::Server_AdvanceFromArmy_Implementation()
 
 void ASetupPlayerController::Server_SetUnitCount_Implementation(FName UnitId, int32 WeaponIndex, int32 NewCount)
 {
+	if (ASetupGameState* S = GetWorld()->GetGameState<ASetupGameState>())
+	{
+		const bool bP1 = (PlayerState == S->Player1);
+		UE_LOG(LogTemp, Warning, TEXT("[RPC] Server_SetUnitCount from %s  Unit=%s WIdx=%d New=%d  Seat=%s"),
+			*GetNameSafe(this), *UnitId.ToString(), WeaponIndex, NewCount, bP1?TEXT("P1"):TEXT("P2"));
+	}
 	if (ASetupGamemode* GM = GetWorld()->GetAuthGameMode<ASetupGamemode>())
 	{
 		GM->HandleSetUnitCount(this, UnitId, WeaponIndex, FMath::Clamp(NewCount,0,99));

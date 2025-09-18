@@ -54,7 +54,15 @@ public:
 	UFUNCTION(BlueprintPure)
 	UDataTable* GetUnitsDTForLocalSeat(const APlayerState* LocalSeat) const;
 
-	
+	UFUNCTION()
+	int32 GetTotalCountFor(FName UnitId, bool bP1) const;
+	void RecomputePointsAll();
+
+	UFUNCTION()
+	void OnRep_Points() const;
+
+	void RecomputePointsForSeat(bool bP1);
+
 	UPROPERTY(ReplicatedUsing=OnRep_PlayerSlots, BlueprintReadOnly)
 	FString Player1Name;
 
@@ -85,8 +93,6 @@ public:
 	UPROPERTY(ReplicatedUsing=OnRep_SelectedMap, BlueprintReadOnly, Category="Map")
 	FName SelectedMapRow = NAME_None;
 
-	
-
 	UPROPERTY(BlueprintAssignable)
 	FOnMapSelectionChanged OnMapSelectionChanged;
 
@@ -108,26 +114,27 @@ public:
 	UPROPERTY(Replicated,ReplicatedUsing=OnRep_ReadyUp, BlueprintReadOnly)
 	bool bP2Ready = false;
 
-	UPROPERTY(Replicated)
+	UPROPERTY(ReplicatedUsing=OnRep_Rosters)
 	TArray<FRosterEntry> P1Roster;
-	UPROPERTY(Replicated)
+	UPROPERTY(ReplicatedUsing=OnRep_Rosters)
 	TArray<FRosterEntry> P2Roster;
-
-	UPROPERTY(ReplicatedUsing=OnRep_Rosters, BlueprintReadOnly)
-	int32 P1Points = 0;
-	UPROPERTY(ReplicatedUsing=OnRep_Rosters, BlueprintReadOnly)
-	int32 P2Points = 0;
-
+	
 	int32 GetCountFor(FName UnitId, int32 WeaponIndex, bool bP1) const;
 	void  SetCountFor(FName UnitId, int32 WeaponIndex, int32 NewCount, bool bP1);
 	int32 GetTotalPoints(bool bP1) const;
+
+	UPROPERTY(ReplicatedUsing=OnRep_Points, BlueprintReadOnly)
+	int32 P1Points = 0;
+	UPROPERTY(ReplicatedUsing=OnRep_Points, BlueprintReadOnly)
+	int32 P2Points = 0;
 	
 	UPROPERTY(BlueprintAssignable)
 	FOnRosterChanged OnRosterChanged;
 	
 	UPROPERTY(Replicated, BlueprintReadOnly)
 	FName SelectedMap; // Level name/soft ref
-	
+
+	UDataTable* GetUnitsDTForSeat(bool bP1) const;
 	UFUNCTION()
 	void OnRep_Phase();
 

@@ -27,6 +27,8 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="UI")
 	TSubclassOf<UUserWidget> SetupWidgetClass;
 
+	UPROPERTY() TWeakObjectPtr<USetupWidget> SetupUI;
+
 	UFUNCTION(Server, Reliable, BlueprintCallable)
 	void Server_SnapshotSetupToPS();
 	
