@@ -115,18 +115,32 @@ void UTurnContextWidget::Refresh()
     FillAttacker(Sel);
     UpdateActionPoints();
 
-    // Target/preview text only (no buttons here anymore)
+    AUnitBase* PreviewAttacker = nullptr;
+    AUnitBase* PreviewTarget   = nullptr;
+
+    if (S)
+    {
+        // Prefer ActionPreview if present, fall back to Preview
+        PreviewAttacker = S->ActionPreview.Attacker ? S->ActionPreview.Attacker : S->Preview.Attacker;
+        PreviewTarget   = S->ActionPreview.Target   ? S->ActionPreview.Target   : S->Preview.Target;
+    }
+
     const bool bPreviewActive =
         (bBattle && Ph == ETurnPhase::Shoot &&
-         S->Preview.Attacker == Sel && S->Preview.Target != nullptr);
+         PreviewAttacker == Sel && PreviewTarget != nullptr);
 
     if (bPreviewActive)
     {
-        FillTarget(S->Preview.Target);
-        const int32 HitMod = S->ActionPreview.HitMod;
+        FillTarget(PreviewTarget);
+
+        const int32 HitMod = S->ActionPreview.Attacker == Sel && S->ActionPreview.Target == PreviewTarget
+                               ? S->ActionPreview.HitMod
+                               : S->ActionPreview.HitMod; // same source today
+
         const int32 SaveMod = S->ActionPreview.SaveMod;
         const ECoverType Cover = S->ActionPreview.Cover;
-        UpdateCombatEstimates(Sel, S->Preview.Target, HitMod, SaveMod, Cover);
+
+        UpdateCombatEstimates(Sel, PreviewTarget, HitMod, SaveMod, Cover);
     }
     else
     {
@@ -218,8 +232,14 @@ void UTurnContextWidget::RebuildActionButtons(AUnitBase* Sel)
 
         FActionRuntimeArgs PreviewArgs;
         PreviewArgs.InstigatorPC = PC;
-        if (S->Preview.Attacker == Sel && S->Preview.Target)
-            PreviewArgs.TargetUnit = S->Preview.Target;
+
+        AUnitBase* UI_Attacker = S->ActionPreview.Attacker ? S->ActionPreview.Attacker : S->Preview.Attacker;
+        AUnitBase* UI_Target   = S->ActionPreview.Target   ? S->ActionPreview.Target   : S->Preview.Target;
+
+        if (UI_Attacker == Sel && UI_Target)
+        {
+            PreviewArgs.TargetUnit = UI_Target;
+        }
 
         const bool bCan = Act->CanExecute(Sel, PreviewArgs);
 

@@ -219,6 +219,16 @@ void AMatchGameState::Multicast_DrawSphere_Implementation(const FVector& Center,
     Ring(FVector::UpVector,    FVector::ForwardVector); // YZ
 }
 
+void AMatchGameState::OnRep_Preview()
+{
+	OnDeploymentChanged.Broadcast();
+}
+
+void AMatchGameState::OnRep_ActionPreview()
+{
+	OnDeploymentChanged.Broadcast();
+}
+
 void AMatchGameState::Multicast_SetPotentialTargets_Implementation(const TArray<AUnitBase*>& NewPotentials)
 {
     // Clear old potentials
@@ -233,6 +243,8 @@ void AMatchGameState::Multicast_SetPotentialTargets_Implementation(const TArray<
             U->SetHighlightLocal(EUnitHighlight::PotentialEnemy);
         LastPotentialApplied.Add(U);
     }
+
+	OnDeploymentChanged.Broadcast();
 }
 
 void AMatchGameState::Multicast_SetPotentialAllies_Implementation(const TArray<AUnitBase*>& NewPotentials)
@@ -249,6 +261,8 @@ void AMatchGameState::Multicast_SetPotentialAllies_Implementation(const TArray<A
 			U->SetHighlightLocal(EUnitHighlight::PotentialAlly);
 		LastPotentialApplied.Add(U);
 	}
+
+	OnDeploymentChanged.Broadcast();
 }
 
 void AMatchGameState::Multicast_ClearPotentialTargets_Implementation()
@@ -265,6 +279,8 @@ void AMatchGameState::Multicast_ClearPotentialTargets_Implementation()
         U->SetHighlightLocal(EUnitHighlight::None);
     }
     LastPotentialApplied.Reset();
+
+	OnDeploymentChanged.Broadcast();
 }
 
 void AMatchGameState::BeginPlay()
@@ -334,6 +350,8 @@ void AMatchGameState::Multicast_ApplySelectionVis_Implementation(AUnitBase* NewS
 
     LastSelApplied = NewSel;
     LastTgtApplied = NewTgt;
+
+	OnDeploymentChanged.Broadcast();
 }
 
 // Server-side helpers (also apply locally so a listen host sees updates)

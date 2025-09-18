@@ -144,9 +144,7 @@ public:
 	const FMatchSummary& GetFinalSummary() const { return FinalSummary; }
 	
 	void SetFinalSummary(const FMatchSummary& In) { FinalSummary = In; OnRep_FinalSummary(); ForceNetUpdate(); }
-
-	UPROPERTY(ReplicatedUsing=OnRep_Match)
-	FCombatPreview Preview;
+	
 	UFUNCTION() void OnRep_Match(){ OnDeploymentChanged.Broadcast(); }
 	
 	UFUNCTION(BlueprintPure, Category="Teams")
@@ -155,13 +153,19 @@ public:
 	UPROPERTY(Replicated)
 	bool bTeamsAndTurnsInitialized = false;
 
+	// Replace your existing UPROPERTY lines for these two with:
 	UPROPERTY(ReplicatedUsing=OnRep_Preview)
+	FCombatPreview Preview;
+
+	UPROPERTY(ReplicatedUsing=OnRep_ActionPreview)
 	FActionPreview ActionPreview;
+
+	// Add these declarations somewhere in the public/protected section:
+	UFUNCTION() void OnRep_Preview();
+	UFUNCTION() void OnRep_ActionPreview();
 
 	UPROPERTY(Transient, BlueprintReadOnly)
 	TArray<class AObjectiveMarker*> Objectives;
-
-	UFUNCTION() void OnRep_Preview() { OnDeploymentChanged.Broadcast(); }
 
 	UPROPERTY(ReplicatedUsing=OnRep_Match) uint8 CurrentRound = 1;
 	UPROPERTY(ReplicatedUsing=OnRep_Match) uint8 MaxRounds = 5;
