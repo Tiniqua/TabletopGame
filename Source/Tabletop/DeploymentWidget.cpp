@@ -156,15 +156,19 @@ void UDeploymentWidget::RebuildUnitPanels()
         {
             if (E.Count <= 0) continue;
 
-            FString Label = E.UnitId.ToString();
-
-            if (LocalUnitsDT)
+            // Prefer server-computed label (replicated). Fallback to local DT lookup if empty.
+            FString Label = E.ServerDisplayLabel.ToString();
+            if (Label.IsEmpty())
             {
-                if (const FUnitRow* Row = LocalUnitsDT->FindRow<FUnitRow>(E.UnitId, TEXT("DeployLabel_Local")))
+                Label = E.UnitId.ToString();
+                if (LocalUnitsDT)
                 {
-                    if (Row->Weapons.IsValidIndex(E.WeaponIndex))
+                    if (const FUnitRow* Row = LocalUnitsDT->FindRow<FUnitRow>(E.UnitId, TEXT("DeployLabel_Local")))
                     {
-                        Label += FString::Printf(TEXT(" — %s"), *Row->Weapons[E.WeaponIndex].WeaponId.ToString());
+                        if (Row->Weapons.IsValidIndex(E.WeaponIndex))
+                        {
+                            Label += FString::Printf(TEXT(" — %s"), *Row->Weapons[E.WeaponIndex].WeaponId.ToString());
+                        }
                     }
                 }
             }
@@ -176,6 +180,7 @@ void UDeploymentWidget::RebuildUnitPanels()
                 LocalUnitsPanel->AddChild(RowW);
             }
         }
+
     }
 
     // ---------- OPPONENT SIDE ----------
@@ -201,15 +206,18 @@ void UDeploymentWidget::RebuildUnitPanels()
         {
             if (E.Count <= 0) continue;
 
-            FString Label = E.UnitId.ToString();
-
-            if (OppUnitsDT)
+            FString Label = E.ServerDisplayLabel.ToString();
+            if (Label.IsEmpty())
             {
-                if (const FUnitRow* Row = OppUnitsDT->FindRow<FUnitRow>(E.UnitId, TEXT("DeployLabel_Opp")))
+                Label = E.UnitId.ToString();
+                if (OppUnitsDT)
                 {
-                    if (Row->Weapons.IsValidIndex(E.WeaponIndex))
+                    if (const FUnitRow* Row = OppUnitsDT->FindRow<FUnitRow>(E.UnitId, TEXT("DeployLabel_Opp")))
                     {
-                        Label += FString::Printf(TEXT(" — %s"), *Row->Weapons[E.WeaponIndex].WeaponId.ToString());
+                        if (Row->Weapons.IsValidIndex(E.WeaponIndex))
+                        {
+                            Label += FString::Printf(TEXT(" — %s"), *Row->Weapons[E.WeaponIndex].WeaponId.ToString());
+                        }
                     }
                 }
             }

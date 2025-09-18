@@ -336,6 +336,33 @@ void AMatchGameState::OnRep_SelectionVis()
     OnDeploymentChanged.Broadcast(); // keep your UI refresh hook
 }
 
+FText AMatchGameMode::BuildRosterDisplayLabel(APlayerState* ForPS, const FRosterEntry& E) const
+{
+	const ATabletopPlayerState* TPS = ForPS ? Cast<ATabletopPlayerState>(ForPS) : nullptr;
+	if (!TPS) return FText::FromName(E.UnitId);
+
+	UDataTable* UnitsDT = UnitsForFaction(TPS->SelectedFaction);
+	if (!UnitsDT) return FText::FromName(E.UnitId);
+
+	const FUnitRow* Row = UnitsDT->FindRow<FUnitRow>(E.UnitId, TEXT("RosterLabel"));
+	if (!Row) return FText::FromName(E.UnitId);
+
+	FString Label = E.UnitId.ToString();
+	if (Row->Weapons.IsValidIndex(E.WeaponIndex))
+	{
+		Label += FString::Printf(TEXT(" — %s"), *Row->Weapons[E.WeaponIndex].WeaponId.ToString());
+	}
+	return FText::FromString(Label);
+}
+
+void AMatchGameMode::FillServerLabelsFor(APlayerState* ForPS, TArray<FRosterEntry>& Arr) const
+{
+	for (FRosterEntry& E : Arr)
+	{
+		E.ServerDisplayLabel = BuildRosterDisplayLabel(ForPS, E);
+	}
+}
+
 void AMatchGameState::Multicast_ApplySelectionVis_Implementation(AUnitBase* NewSel, AUnitBase* NewTgt)
 {
     // Clear old
@@ -1345,11 +1372,15 @@ bool AMatchGameMode::CanDeployAt(APlayerController* PC, const FVector& Location)
 
 void AMatchGameMode::CopyRostersFromPlayerStates()
 {
-    if (AMatchGameState* S = GS())
-    {
-        S->P1Remaining = S->P1 ? S->P1->Roster : TArray<FRosterEntry>{};
-        S->P2Remaining = S->P2 ? S->P2->Roster : TArray<FRosterEntry>{};
-    }
+	if (AMatchGameState* S = GS())
+	{
+		S->P1Remaining = S->P1 ? S->P1->Roster : TArray<FRosterEntry>{};
+		S->P2Remaining = S->P2 ? S->P2->Roster : TArray<FRosterEntry>{};
+
+		// NEW: compute once on the server; replicates to everyone
+		if (S->P1) { FillServerLabelsFor(S->P1, S->P1Remaining); }
+		if (S->P2) { FillServerLabelsFor(S->P2, S->P2Remaining); }
+	}
 }
 
 bool AMatchGameMode::AnyRemainingFor(APlayerState* PS) const

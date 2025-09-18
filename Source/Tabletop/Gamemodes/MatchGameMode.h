@@ -256,6 +256,11 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly)
 	UDataTable* FactionsTable = nullptr;
 
+	FText BuildRosterDisplayLabel(class APlayerState* ForPS, const FRosterEntry& E) const;
+
+	// Fill ServerDisplayLabel for every row in an array
+	void  FillServerLabelsFor(class APlayerState* ForPS, TArray<FRosterEntry>& Arr) const;
+
 	FShotResolveResult ResolveRangedAttack_Internal(AUnitBase* Attacker, AUnitBase* Target, const TCHAR* DebugPrefix);
 	
 	// Server RPC endpoints (called by PC server functions)

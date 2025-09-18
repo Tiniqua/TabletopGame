@@ -26,6 +26,9 @@ struct FRosterEntry
 	UPROPERTY(EditAnywhere, BlueprintReadWrite) FName UnitId = NAME_None;
 	UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 WeaponIndex = 0;
 	UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 Count = 0;
+
+	UPROPERTY(BlueprintReadOnly)
+	FText ServerDisplayLabel;
 };
 
 static FString BuildListenURL(const TSoftObjectPtr<UWorld>& Map)
