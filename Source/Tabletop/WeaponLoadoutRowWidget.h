@@ -42,8 +42,6 @@ private:
 	class ASetupGameState* GS() const;
 	class ASetupPlayerController* PC() const;
 
-	int32 GetLocalSeatCount() const;
-	void  SendCountToServer(int32 NewCount) const;
-
-	static FString FormatWeaponStats(const FWeaponProfile& W);
+        int32 GetLocalSeatCount() const;
+        void  SendCountToServer(int32 NewCount) const;
 };
