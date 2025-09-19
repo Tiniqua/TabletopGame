@@ -6,8 +6,6 @@
 #include "Blueprint/UserWidget.h"
 #include "UnitRowWidget.generated.h"
 
-// (helpers namespace UIFormat is at the very top of this header; see earlier block)
-
 class UTextBlock;
 class UPanelWidget;
 
