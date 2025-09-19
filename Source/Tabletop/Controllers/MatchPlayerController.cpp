@@ -3,6 +3,7 @@
 
 
 #include "EngineUtils.h"
+#include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Components/TextBlock.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -44,6 +45,10 @@ void AMatchPlayerController::BeginPlay()
 		S->OnDeploymentChanged.Broadcast();
 	}
 
+	OnSelectedChanged.AddDynamic(this, &AMatchPlayerController::HandleSelectedChanged_Internal);
+	CacheTurnContextIfNeeded();
+	UpdateTurnContextVisibility();
+
 	RefreshPhaseUI();
 }
 
@@ -66,11 +71,48 @@ void AMatchPlayerController::SetSelectedUnit(AUnitBase* NewSel)
 	OnSelectedChanged.Broadcast(SelectedUnit);
 }
 
+void AMatchPlayerController::CacheTurnContextIfNeeded(bool bForce)
+{
+	if (!bForce && TurnContextRef) return;
+
+	TArray<UUserWidget*> Hits;
+	// TopLevelOnly=false so we can find it even if it lives under SetupWidget / GameplayWidget
+	UWidgetBlueprintLibrary::GetAllWidgetsOfClass(this, Hits, UTurnContextWidget::StaticClass(), /*TopLevelOnly*/false);
+	TurnContextRef = Hits.Num() ? Cast<UTurnContextWidget>(Hits[0]) : nullptr;
+}
+
+// --- central visibility rule ---
+void AMatchPlayerController::UpdateTurnContextVisibility()
+{
+	CacheTurnContextIfNeeded();
+
+	if (!TurnContextRef) return; // nothing to show/hide yet
+
+	AMatchGameState* S = GS();
+	const bool bBattle = (S && S->Phase == EMatchPhase::Battle);
+	const bool bEnd    = (S && S->Phase == EMatchPhase::EndGame && S->bShowSummary);
+	const bool bMyTurn = (bBattle && S->CurrentTurn == PlayerState);
+	const bool bHaveSel = (SelectedUnit != nullptr);
+
+	const bool bShow = bBattle && !bEnd && bMyTurn && bHaveSel;
+
+	TurnContextRef->SetVisibility(bShow ? ESlateVisibility::SelfHitTestInvisible
+										: ESlateVisibility::Collapsed);
+}
+
+// react whenever our selection changes
+void AMatchPlayerController::HandleSelectedChanged_Internal(AUnitBase* /*NewSel*/)
+{
+	UpdateTurnContextVisibility();
+}
+
 void AMatchPlayerController::Client_KickUIRefresh_Implementation()
 {
 	// Ensure we’re bound and the correct widget is visible for the current phase
 	TryBindToGameState();
 	OnPhaseSignalChanged(); // calls RefreshPhaseUI()
+	CacheTurnContextIfNeeded(true);    // UI might have been rebuilt; reacquire
+	UpdateTurnContextVisibility();
 
 	// If the Deployment widget exists, force one pull-based refresh
 	if (DeploymentWidgetInstance)
@@ -254,6 +296,7 @@ void AMatchPlayerController::Client_OnUnitMoved_Implementation(AUnitBase* Unit, 
 	}
 	
 	ExitTargetMode();
+	UpdateTurnContextVisibility();
 
 #if !(UE_BUILD_SHIPPING)
 	if (GEngine && Unit)
@@ -274,6 +317,7 @@ void AMatchPlayerController::Client_OnMoveDenied_OverBudget_Implementation(AUnit
 		SelectUnit(nullptr);   // your helper that broadcasts OnSelectedChanged
 	}
 	ExitTargetMode();          // just in case
+	UpdateTurnContextVisibility();
 
 	#if !(UE_BUILD_SHIPPING)
 	if (GEngine && Unit)
@@ -355,12 +399,15 @@ void AMatchPlayerController::TryBindToGameState()
 void AMatchPlayerController::OnPhaseSignalChanged()
 {
 	RefreshPhaseUI();
+	UpdateTurnContextVisibility();
 }
 
 void AMatchPlayerController::RefreshPhaseUI()
 {
 	AMatchGameState* State = GS();
 
+	UpdateTurnContextVisibility();
+	
 	if (!State)
 	{
 		ShowWidgetTyped(DeploymentWidgetInstance, DeploymentWidgetClass, false);
@@ -422,6 +469,7 @@ void AMatchPlayerController::SelectUnit(AUnitBase* U)
 	SetSelectedUnit(U);
 
 	Server_SetGlobalSelectedUnit(U);
+	UpdateTurnContextVisibility();
 }
 
 void AMatchPlayerController::ClearSelection()
@@ -430,8 +478,10 @@ void AMatchPlayerController::ClearSelection()
 	SelectedUnit = nullptr;
 	OnSelectedChanged.Broadcast(nullptr);
 	SetSelectedUnit(nullptr);
+	UpdateTurnContextVisibility();
 
 	Server_SetGlobalSelectedUnit(nullptr);
+	UpdateTurnContextVisibility();
 }
 
 

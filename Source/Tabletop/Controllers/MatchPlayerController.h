@@ -129,6 +129,10 @@ public:
 	
 	UFUNCTION(Server, Reliable)
 	void Server_ExecuteAction(AUnitBase* Unit, FName ActionId, FActionRuntimeArgs Args);
+
+	UFUNCTION() void HandleSelectedChanged_Internal(class AUnitBase* NewSel);
+	void UpdateTurnContextVisibility();
+	void CacheTurnContextIfNeeded(bool bForce = false);
 	
 	template<typename TWidget>
 	void ShowWidgetTyped(TWidget*& Instance, TSubclassOf<TWidget> Class, bool bShow)
@@ -154,6 +158,9 @@ private:
 	
 	FTimerHandle DeployCursorTimer;
 	EMouseCursor::Type DefaultCursorBackup = EMouseCursor::Default;
+
+	UPROPERTY()
+	UTurnContextWidget* TurnContextRef = nullptr;
 
 	EMouseCursor::Type BackedUpCursor = EMouseCursor::Default;
 

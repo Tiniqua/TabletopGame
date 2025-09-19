@@ -46,7 +46,7 @@
     &quot;WebServerToolWindowFactoryState&quot;: &quot;false&quot;,
     &quot;XThreadsFramesViewSplitterKey&quot;: &quot;0.49772105&quot;,
     &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
-    &quot;settings.editor.selected.configurable&quot;: &quot;preferences.keymap&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;preferences.pluginManager&quot;,
     &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
   }
 }</component>
@@ -460,7 +460,10 @@
       <workItem from="1758098070841" duration="14864000" />
       <workItem from="1758113018229" duration="14310000" />
       <workItem from="1758179952511" duration="1875000" />
-      <workItem from="1758193720465" duration="16352000" />
+      <workItem from="1758193720465" duration="17705000" />
+      <workItem from="1758282661940" duration="300000" />
+      <workItem from="1758282997077" duration="115000" />
+      <workItem from="1758283178067" duration="7395000" />
     </task>
     <servers />
   </component>

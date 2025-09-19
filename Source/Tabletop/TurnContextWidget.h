@@ -46,8 +46,21 @@ protected:
     UPROPERTY(meta=(BindWidgetOptional)) UTextBlock*  APText       = nullptr;
     UPROPERTY(meta=(BindWidgetOptional)) UPanelWidget* ActionsPanel = nullptr;
 
+    UPROPERTY(meta=(BindWidgetOptional)) UPanelWidget* Panel_Attacker = nullptr;
+    UPROPERTY(meta=(BindWidgetOptional)) UPanelWidget* Panel_Target   = nullptr;
+    UPROPERTY(meta=(BindWidgetOptional)) UPanelWidget* Panel_Movement = nullptr;
+
+    // AP
+    UPROPERTY(meta=(BindWidgetOptional)) UPanelWidget*   APBar = nullptr;
+    UPROPERTY(EditDefaultsOnly, Category="UI|AP") int32  MaxAPIcons = 4; // “out of 4”
+    UPROPERTY(EditDefaultsOnly, Category="UI|AP") UTexture2D* AP_Pip_Active = nullptr;
+    UPROPERTY(EditDefaultsOnly, Category="UI|AP") UTexture2D* AP_Pip_Inactive = nullptr;
+
     // Movement-specific
     UPROPERTY(meta=(BindWidget)) UTextBlock* MoveBudgetText = nullptr;
+
+    // NEW: bind the label you have in UMG
+    UPROPERTY(meta=(BindWidgetOptional)) UTextBlock* MoveLabel = nullptr;
 
     // Target + preview block
     UPROPERTY(meta=(BindWidget)) UTextBlock* TargetNameText     = nullptr;
@@ -80,6 +93,12 @@ protected:
     void FillWeaponLoadout(AUnitBase* U);
     void FillTarget(AUnitBase* U);
     void ClearTargetFields();
+
+    UFUNCTION() void HandleSelectedUnitMoveChanged();  // delegate target
+    void UpdateMovementUI(class AUnitBase* Sel);
+
+    // track which unit we’re listening to
+    TWeakObjectPtr<class AUnitBase> BoundSel;
 
     void UpdateCombatEstimates(AUnitBase* Attacker, AUnitBase* Target,
                                int32 HitMod, int32 SaveMod, ECoverType CoverType);

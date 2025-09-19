@@ -638,8 +638,17 @@ void AUnitBase::OnRep_Models()
 
 void AUnitBase::OnRep_Move()
 {
-    // Hook for UI if needed
+    OnMoveChanged.Broadcast();
     EnsureRuntimeBuilt();
+}
+
+void AUnitBase::NotifyMoveChanged()
+{
+    OnMoveChanged.Broadcast();
+    if (HasAuthority())
+    {
+        ForceNetUpdate(); // push to clients a bit sooner
+    }
 }
 
 void AUnitBase::RebuildRuntimeAbilitiesFromSources()

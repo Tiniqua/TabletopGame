@@ -5,17 +5,25 @@
 #include "LibraryHelpers.h"
 #include "WeaponDisplayText.h"
 #include "WeaponKeywordHelpers.h"
-
 #include "Components/PanelWidget.h"
-#include "Components/Button.h"
 #include "Components/TextBlock.h"
-
 #include "Actors/CoverVolume.h"
 #include "Actors/UnitAction.h"
 #include "Actors/UnitBase.h"
+#include "Blueprint/WidgetTree.h"
+#include "Components/Image.h"
 #include "Controllers/MatchPlayerController.h"
 #include "Gamemodes/MatchGameMode.h"
 #include "PlayerStates/TabletopPlayerState.h"
+
+static void SetImageBrush(UImage* Img, UTexture2D* Tex)
+{
+    if (!Img || !Tex) return;
+    FSlateBrush B;
+    B.SetResourceObject(Tex);
+    B.ImageSize = FVector2D(12.f, 12.f); // tiny pip
+    Img->SetBrush(B);
+}
 
 // ---------------- helpers (unchanged) ----------------
 
@@ -24,6 +32,13 @@ struct FEffectiveUnitFlags
     bool  bCanShootAfterAdvance = false;
     float MoveBudgetEffective   = 0.f;
 };
+
+
+static FText InchesFmt(float V)
+{
+    // 1 decimal, drop trailing .0 via rounding behavior you prefer
+    return FText::FromString(FString::Printf(TEXT("%.1f\""), V));
+}
 
 static int32 TryGetIntProp(const AUnitBase* U, const TCHAR* PropName, int32 DefaultIfMissing = 7)
 {
@@ -91,7 +106,34 @@ void UTurnContextWidget::NativeDestruct()
 // ---------------- events ----------------
 
 void UTurnContextWidget::OnMatchChanged()                     { Refresh(); }
-void UTurnContextWidget::OnSelectedChanged(AUnitBase* /*U*/)  { Refresh(); }
+void UTurnContextWidget::OnSelectedChanged(AUnitBase* NewSel)
+{
+    if (BoundSel.IsValid())
+    {
+        BoundSel->OnMoveChanged.RemoveAll(this);
+    }
+
+    BoundSel = NewSel;
+
+    // bind new (safe even if null)
+    if (BoundSel.IsValid())
+    {
+        BoundSel->OnMoveChanged.AddDynamic(this, &UTurnContextWidget::HandleSelectedUnitMoveChanged);
+    }
+
+    // normal flow
+    Refresh();
+}
+
+void UTurnContextWidget::HandleSelectedUnitMoveChanged()
+{
+    // keep the movement row fresh & re-evaluate actions (Move can become blocked/unblocked)
+    AMatchPlayerController* P = MPC();
+    AUnitBase* Sel = P ? P->SelectedUnit : nullptr;
+    UpdateMovementUI(Sel);
+    RebuildActionButtons(Sel);
+}
+
 
 bool UTurnContextWidget::IsMyTurn() const
 {
@@ -100,6 +142,46 @@ bool UTurnContextWidget::IsMyTurn() const
         return (S->Phase == EMatchPhase::Battle) && (S->CurrentTurn == P->PlayerState);
     return false;
 }
+
+void UTurnContextWidget::UpdateMovementUI(AUnitBase* Sel)
+{
+    if (!Sel)
+    {
+        if (MoveBudgetText) MoveBudgetText->SetText(FText::GetEmpty());
+        if (MoveLabel)      MoveLabel->SetText(FText::GetEmpty());
+        return;
+    }
+
+    const float Budget = Sel->MoveBudgetInches;
+    const float Max    = Sel->MoveMaxInches;
+
+    // Label
+    if (MoveLabel)
+    {
+        const bool bCanMoveNow = (Sel->ModelsCurrent > 0) && (Max > 0.f) && (Budget > 0.f);
+        MoveLabel->SetText(bCanMoveNow
+            ? FText::FromString(TEXT("Movement:"))
+            : FText::FromString(TEXT("Cannot Move")));
+    }
+
+    // Budget text e.g. 4.0"/6.0"
+    if (MoveBudgetText)
+    {
+        if (Max <= 0.f)
+        {
+            MoveBudgetText->SetText(FText::FromString(TEXT("—")));
+        }
+        else
+        {
+            MoveBudgetText->SetText(
+                FText::FromString(
+                    FString::Printf(TEXT("%s / %s"),
+                        *InchesFmt(FMath::Max(0.f, Budget)).ToString(),
+                        *InchesFmt(Max).ToString())));
+        }
+    }
+}
+
 
 // ---------------- main refresh ----------------
 
@@ -111,6 +193,23 @@ void UTurnContextWidget::Refresh()
 
     const bool bBattle  = S && S->Phase == EMatchPhase::Battle;
     const ETurnPhase Ph = bBattle ? S->TurnPhase : ETurnPhase::Move;
+    
+    if (Panel_Movement)
+        Panel_Movement->SetVisibility(Ph == ETurnPhase::Move ? ESlateVisibility::Visible
+                                                             : ESlateVisibility::Collapsed);
+
+    // keep movement UI in sync even if hidden (no harm)
+    UpdateMovementUI(Sel);
+
+    bool bHasPreview = false;
+    if (S)
+    {
+        AUnitBase* PreviewAttacker = S->ActionPreview.Attacker ? S->ActionPreview.Attacker : S->Preview.Attacker;
+        AUnitBase* PreviewTarget   = S->ActionPreview.Target   ? S->ActionPreview.Target   : S->Preview.Target;
+        bHasPreview = (Ph == ETurnPhase::Shoot) && (PreviewAttacker == Sel) && (PreviewTarget != nullptr);
+    }
+    if (Panel_Target)
+        Panel_Target->SetVisibility(bHasPreview ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 
     // Attacker info + AP + loadout
     FillAttacker(Sel);
@@ -157,39 +256,58 @@ void UTurnContextWidget::Refresh()
 
 void UTurnContextWidget::UpdateActionPoints()
 {
-    if (!APText) return;
+    if (!APText && !APBar) return;
 
     AMatchGameState* S = GS();
     AMatchPlayerController* P = MPC();
     AUnitBase* Sel = P ? P->SelectedUnit : nullptr;
 
-    if (!Sel) { APText->SetText(FText::GetEmpty()); return; }
-
-    const auto* APComp = Sel->FindComponentByClass<UUnitActionResourceComponent>();
-    if (!APComp) { APText->SetText(FText::GetEmpty()); return; }
-
-    const bool bBattle = (S && S->Phase == EMatchPhase::Battle);
-    const ETurnPhase Ph = bBattle ? S->TurnPhase : ETurnPhase::Move;
-
-    // “Free shot” visual hint if Assault+Advanced in Shoot phase
-    bool bFreeShotNow = false;
-    if (Ph == ETurnPhase::Shoot && Sel->bAdvancedThisTurn)
+    if (!Sel)
     {
-        const bool bAssault = UWeaponKeywordHelpers::HasKeyword(Sel->GetActiveWeaponProfile(), EWeaponKeyword::Assault);
-        bFreeShotNow = bAssault;
+        if (APText) APText->SetText(FText::GetEmpty());
+        if (APBar)  APBar->ClearChildren();
+        return;
     }
 
+    const auto* APComp = Sel->FindComponentByClass<UUnitActionResourceComponent>();
+    if (!APComp)
+    {
+        if (APText) APText->SetText(FText::GetEmpty());
+        if (APBar)  APBar->ClearChildren();
+        return;
+    }
+
+    // --- original text (kept) ---
+    const bool bBattle = (S && S->Phase == EMatchPhase::Battle);
+    const ETurnPhase Ph = bBattle ? S->TurnPhase : ETurnPhase::Move;
+    bool bFreeShotNow = (Ph == ETurnPhase::Shoot && Sel->bAdvancedThisTurn &&
+                         UWeaponKeywordHelpers::HasKeyword(Sel->GetActiveWeaponProfile(), EWeaponKeyword::Assault));
     const int32 Debt = Sel->NextPhaseAPDebt;
 
-    FString Line = FString::Printf(TEXT("AP: %d / %d"), APComp->CurrentAP, APComp->MaxAP);
+    if (APText)
+    {
+        FString Line = FString::Printf(TEXT("AP: %d / %d"), APComp->CurrentAP, APComp->MaxAP);
+        if (Debt > 0) Line += FString::Printf(TEXT("   (−%d next phase)"), Debt);
+        if (bFreeShotNow) Line += TEXT("   (Shoot is free)");
+        APText->SetText(FText::FromString(Line));
+    }
 
-    if (Debt > 0)
-        Line += FString::Printf(TEXT("   (−%d next phase)"), Debt);
+    // --- new icons ---
+    if (APBar)
+    {
+        APBar->ClearChildren();
+        const int32 MaxIcons = FMath::Clamp(MaxAPIcons > 0 ? MaxAPIcons : 4, 1, 8);
+        const int32 ClampedAP = FMath::Clamp(APComp->CurrentAP, 0, MaxIcons);
 
-    if (bFreeShotNow)
-        Line += TEXT("   (Shoot is free)");
-
-    APText->SetText(FText::FromString(Line));
+        for (int32 i = 0; i < MaxIcons; ++i)
+        {
+            UImage* Pip = WidgetTree->ConstructWidget<UImage>(UImage::StaticClass());
+            if (!Pip) continue;
+            if (i < ClampedAP) SetImageBrush(Pip, AP_Pip_Active);
+            else               SetImageBrush(Pip, AP_Pip_Inactive);
+            APBar->AddChild(Pip);
+        }
+    }
 }
 
 void UTurnContextWidget::RebuildActionButtons(AUnitBase* Sel)
@@ -214,55 +332,54 @@ void UTurnContextWidget::RebuildActionButtons(AUnitBase* Sel)
     if (!bOwner) return; // don’t show actions for enemy units
 
     const bool bBattle = (S->Phase == EMatchPhase::Battle);
-    const bool bTurn   =
-        bBattle &&
-        (S->CurrentTurn == PC->PlayerState ||
-         (MyTPS && CurTPS && MyTPS->TeamNum > 0 && CurTPS->TeamNum == MyTPS->TeamNum));
-
     const ETurnPhase Ph = bBattle ? S->TurnPhase : ETurnPhase::Move;
 
+    // current AP
+    int32 CurrentAP = 0;
+    if (const auto* APComp = Sel->FindComponentByClass<UUnitActionResourceComponent>())
+        CurrentAP = APComp->CurrentAP;
+
     TSubclassOf<UActionButtonWidget> RowClass =
-        ActionButtonClass ? ActionButtonClass
-                          : TSubclassOf<UActionButtonWidget>(UActionButtonWidget::StaticClass());
+        ActionButtonClass ? ActionButtonClass : TSubclassOf<UActionButtonWidget>(UActionButtonWidget::StaticClass());
 
     for (UUnitAction* Act : Sel->GetActions())
     {
-        const bool bAssault = UWeaponKeywordHelpers::HasKeyword(Sel->GetActiveWeaponProfile(), EWeaponKeyword::Assault);
-        const bool bShowAssaultNote = (Act->Desc.ActionId == TEXT("Shoot") && bAssault);
-        
-        if (!Act || Act->Desc.Phase != Ph) continue;
+        if (!Act) continue;
+        if (Act->Desc.Phase != Ph) continue;
 
         FActionRuntimeArgs PreviewArgs;
         PreviewArgs.InstigatorPC = PC;
 
         AUnitBase* UI_Attacker = S->ActionPreview.Attacker ? S->ActionPreview.Attacker : S->Preview.Attacker;
         AUnitBase* UI_Target   = S->ActionPreview.Target   ? S->ActionPreview.Target   : S->Preview.Target;
+        if (UI_Attacker == Sel && UI_Target) PreviewArgs.TargetUnit = UI_Target;
 
-        if (UI_Attacker == Sel && UI_Target)
-        {
-            PreviewArgs.TargetUnit = UI_Target;
-        }
+        const bool bCanNow = Act->CanExecute(Sel, PreviewArgs);
+        const int32 Cost      = FMath::Max(0, Act->Desc.Cost);
 
-        const bool bCan = Act->CanExecute(Sel, PreviewArgs);
+        const bool bAssault = UWeaponKeywordHelpers::HasKeyword(Sel->GetActiveWeaponProfile(), EWeaponKeyword::Assault);
+        const bool bShowAssaultNote = (Act->Desc.ActionId == TEXT("Shoot") && bAssault);
 
         UActionButtonWidget* Row = CreateWidget<UActionButtonWidget>(GetOwningPlayer(), RowClass);
         if (!Row) continue;
 
         FString Suffix;
         if (Act->Desc.NextPhaseAPCost > 0)
-        {
             Suffix = FString::Printf(TEXT(" (−%d next phase)"), Act->Desc.NextPhaseAPCost);
-        }
 
         const FText CostText = bShowAssaultNote
-        ? FText::Format(NSLOCTEXT("Actions","ActionWithCostAssault","{0}: {1} AP"),
-                        Act->Desc.DisplayName, FText::AsNumber(Act->Desc.Cost))
-        : (Act->Desc.Cost > 0
-            ? FText::Format(NSLOCTEXT("Actions","ActionWithCost","{0}: {1} AP"),
-                            Act->Desc.DisplayName, FText::AsNumber(Act->Desc.Cost))
-            : FText::Format(NSLOCTEXT("Actions","ActionFree","{0}: Free"), Act->Desc.DisplayName));
+            ? FText::Format(NSLOCTEXT("Actions","ActionWithCostAssault","{0}: {1} AP{2}"),
+                            Act->Desc.DisplayName, FText::AsNumber(Cost), FText::FromString(Suffix))
+            : (Cost > 0
+                ? FText::Format(NSLOCTEXT("Actions","ActionWithCost","{0}: {1} AP{2}"),
+                                Act->Desc.DisplayName, FText::AsNumber(Cost), FText::FromString(Suffix))
+                : FText::Format(NSLOCTEXT("Actions","ActionFree","{0}: Free{1}"),
+                                Act->Desc.DisplayName, FText::FromString(Suffix)));
 
-        Row->Init(Act, CostText, bCan);
+        Row->Init(Act, CostText, /*bEnabled*/ bCanNow);
+        // NEW: pass cost for pip rendering (see ActionButtonWidget section)
+        Row->SetCostPips(Cost, AP_Pip_Active, AP_Pip_Inactive);
+
         Row->Owner = Sel;
         Row->OnActionClicked.AddDynamic(this, &UTurnContextWidget::HandleDynamicActionClicked);
         ActionsPanel->AddChild(Row);

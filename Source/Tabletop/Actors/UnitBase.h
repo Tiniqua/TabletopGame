@@ -44,6 +44,8 @@ struct FActionUsageEntry
     UPROPERTY() int16  PerMatch = 0;
 };
 
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnMoveChanged);
+
 UCLASS()
 class TABLETOP_API AUnitBase : public AActor
 {
@@ -62,6 +64,12 @@ public:
     UPROPERTY(Instanced, VisibleAnywhere, BlueprintReadOnly, Category="Action")
     TArray<UUnitAction*> RuntimeActions;
 
+    UPROPERTY(BlueprintAssignable, Category="Events")
+    FOnMoveChanged OnMoveChanged;
+
+    UFUNCTION(BlueprintCallable, Category="Movement")
+    void NotifyMoveChanged();
+    
     UPROPERTY(Instanced, VisibleAnywhere, BlueprintReadOnly, Category="Ability")
     TArray< UUnitAbility*> RuntimeAbilities;
 
@@ -132,7 +140,7 @@ public:
 
     
     UPROPERTY(ReplicatedUsing=OnRep_Move) float MoveBudgetInches = 0.f;
-    UPROPERTY(Replicated)                 float MoveMaxInches    = 0.f;
+    UPROPERTY(ReplicatedUsing=OnRep_Move) float MoveMaxInches    = 0.f;
 
     UPROPERTY(Replicated) bool bHasShot         = false;
 

@@ -10,45 +10,36 @@ class UButton;
 class UTextBlock;
 class UUnitAction;
 
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnActionButtonClicked, UUnitAction*, Action);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnActionClicked, class UUnitAction*, Act);
 
 UCLASS()
 class TABLETOP_API UActionButtonWidget : public UUserWidget
 {
 	GENERATED_BODY()
 public:
-	// Assign in UMG or create at runtime
-	UPROPERTY(meta=(BindWidget)) UButton*    Button = nullptr;
-	UPROPERTY(meta=(BindWidget)) UTextBlock* Label  = nullptr;
-
-	// What this row represents
-	UPROPERTY() UUnitAction* Action = nullptr;
-
-	UPROPERTY() AUnitBase* Owner = nullptr;
-
-	// Parent binds to this to learn which action was clicked
-	UPROPERTY(BlueprintAssignable) FOnActionButtonClicked OnActionClicked;
-
-	// Call after CreateWidget
 	UFUNCTION(BlueprintCallable)
-	void Init(UUnitAction* InAction, const FText& InLabel, bool bEnabled)
-	{
-		Action = InAction;
-		if (Label) Label->SetText(InLabel);
-		if (Button) Button->SetIsEnabled(bEnabled);
-	}
+	void Init(class UUnitAction* InAction, FText InLabel, bool bEnabled);
 
-	virtual void NativeConstruct() override
-	{
-		Super::NativeConstruct();
-		if (Button)
-			Button->OnClicked.AddDynamic(this, &UActionButtonWidget::HandleClicked);
-	}
+	// NEW:
+	UFUNCTION(BlueprintCallable)
+	void SetCostPips(int32 Cost, UTexture2D* Active, UTexture2D* Inactive);
 
-private:
-	UFUNCTION() void HandleClicked()
-	{
-		Action->BeginPreview(Owner);
-		OnActionClicked.Broadcast(Action);
-	}
+	UPROPERTY(meta=(BindWidget))
+	class UTextBlock* LabelText = nullptr;
+	UPROPERTY(meta=(BindWidgetOptional))
+	class UPanelWidget* CostPipsBox = nullptr;
+
+	UPROPERTY()
+	class UUnitAction* Action = nullptr;
+	UPROPERTY()
+	class AUnitBase* Owner = nullptr;
+	UPROPERTY(BlueprintAssignable)
+	FOnActionClicked OnActionClicked;
+
+protected:
+	UPROPERTY(meta=(BindWidget)) class UButton* Button = nullptr;
+
+	virtual void NativeConstruct() override;
+	UFUNCTION()
+	void HandleClicked();
 };
