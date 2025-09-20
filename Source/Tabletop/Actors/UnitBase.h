@@ -5,6 +5,7 @@
 #include "GameFramework/Actor.h"
 #include "Tabletop/ArmyData.h"
 #include "Tabletop/CombatEffects.h"   // FRollModifiers / ECombatEvent
+#include "Components/DecalComponent.h"   // ADD
 #include "UnitBase.generated.h"
 
 class UUnitAction;
@@ -14,6 +15,9 @@ class UStaticMeshComponent;
 class UStaticMesh;
 class ATabletopPlayerState;
 class UNiagaraSystem;
+
+UENUM(BlueprintType)
+enum class ERangeVizMode : uint8 { None, Move, Shoot }; // ADD
 
 UENUM(BlueprintType)
 enum class EUnitHighlight : uint8
@@ -55,6 +59,38 @@ public:
     
     UFUNCTION(BlueprintCallable, BlueprintPure)
     void GetModelWorldLocations(TArray<FVector>& Out) const;
+    
+    UPROPERTY(VisibleAnywhere, Category="RangeViz")
+    UDecalComponent* RangeDecal = nullptr;
+
+    // Optional: keep a sphere for later overlap/prox logic (hidden)
+    UPROPERTY(VisibleAnywhere, Category="RangeViz")
+    USphereComponent* RangeProbe = nullptr;
+
+    UPROPERTY(EditDefaultsOnly, Category="RangeViz|Material")
+    UMaterialInterface* RangeDecalMaterial = nullptr;
+
+    UPROPERTY()
+    UMaterialInstanceDynamic* RangeMID = nullptr;
+
+    UPROPERTY(EditDefaultsOnly, Category="RangeViz|Material", meta=(ClampMin="1.0"))
+    float RangeDecalThickness = 120.f; // Decal Z extent (height of the frustum)
+
+    UPROPERTY(EditDefaultsOnly, Category="RangeViz|Material", meta=(ClampMin="0.0"))
+    float RingSoftness = 30.f; // If your material supports it
+
+    UPROPERTY(EditDefaultsOnly, Category="RangeViz|Material")
+    FLinearColor FriendlyColor = FLinearColor(0.10f, 0.65f, 1.0f, 0.65f);
+
+    UPROPERTY(EditDefaultsOnly, Category="RangeViz|Material")
+    FLinearColor EnemyColor = FLinearColor(1.0f, 0.20f, 0.20f, 0.65f);
+
+    // Show/hide/update
+    UFUNCTION(BlueprintCallable, Category="RangeViz")
+    void UpdateRangePreview(bool bAsTargetContext);
+
+    UFUNCTION(BlueprintCallable, Category="RangeViz")
+    void HideRangePreview();
 
     // ---------- Abilities ----------
 
@@ -299,8 +335,17 @@ public:
 protected:
     virtual void BeginPlay() override;
 
-    UFUNCTION() void OnRep_Models();
-    UFUNCTION() void OnRep_Move();
+    UFUNCTION()
+    void OnRep_Models();
+    UFUNCTION()
+    void OnRep_Move();
+
+    void EnsureRangeDecal();
+    void SetRangeVisible(float RadiusCm, const FLinearColor& Color, ERangeVizMode Mode);
+    void RefreshRangeIfActive();
+    float GetCmPerTTInch_Safe() const;
+
+    ERangeVizMode CurrentRangeMode = ERangeVizMode::None;
 
     
     void RebuildRuntimeActions();

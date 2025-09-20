@@ -113,6 +113,15 @@ int32 AMatchGameMode::ApplyFeelNoPain(int32 IncomingDamage, int32 Fnp)
     return FMath::Max(0, IncomingDamage - prevented);
 }
 
+void AMatchGameState::OnRep_Match()
+{
+	OnDeploymentChanged.Broadcast();
+
+	// Phase might have changed; re-apply selection visual + rings
+	OnRep_SelectionVis();
+}
+
+
 ATabletopPlayerState* AMatchGameState::GetPSForTeam(int32 TeamNum) const
 {
     if (P1 && P1->TeamNum == TeamNum) return P1;
@@ -317,23 +326,34 @@ static TWeakObjectPtr<AUnitBase> GS_LastTgt;
 
 void AMatchGameState::OnRep_SelectionVis()
 {
-    // Clear previous
-    if (GS_LastSel.IsValid() && GS_LastSel.Get() != SelectedUnitGlobal)
-        GS_LastSel->SetHighlightLocal(EUnitHighlight::None);
+	// Clear previous
+	if (GS_LastSel.IsValid() && GS_LastSel.Get() != SelectedUnitGlobal)
+	{
+		GS_LastSel->SetHighlightLocal(EUnitHighlight::None);
+		GS_LastSel->HideRangePreview(); // NEW
+	}
+	if (GS_LastTgt.IsValid() && GS_LastTgt.Get() != TargetUnitGlobal)
+	{
+		GS_LastTgt->SetHighlightLocal(EUnitHighlight::None);
+		GS_LastTgt->HideRangePreview(); // NEW
+	}
 
-    if (GS_LastTgt.IsValid() && GS_LastTgt.Get() != TargetUnitGlobal)
-        GS_LastTgt->SetHighlightLocal(EUnitHighlight::None);
+	// Apply new
+	if (SelectedUnitGlobal)
+	{
+		SelectedUnitGlobal->SetHighlightLocal(EUnitHighlight::Friendly);
+		SelectedUnitGlobal->UpdateRangePreview(/*bAsTargetContext*/false); // NEW
+	}
+	if (TargetUnitGlobal)
+	{
+		TargetUnitGlobal->SetHighlightLocal(EUnitHighlight::Enemy);
+		TargetUnitGlobal->UpdateRangePreview(/*bAsTargetContext*/true); // NEW
+	}
 
-    // Apply new
-    if (SelectedUnitGlobal)
-        SelectedUnitGlobal->SetHighlightLocal(EUnitHighlight::Friendly);
-    if (TargetUnitGlobal)
-        TargetUnitGlobal->SetHighlightLocal(EUnitHighlight::Enemy);
+	GS_LastSel = SelectedUnitGlobal;
+	GS_LastTgt = TargetUnitGlobal;
 
-    GS_LastSel = SelectedUnitGlobal;
-    GS_LastTgt = TargetUnitGlobal;
-
-    OnDeploymentChanged.Broadcast(); // keep your UI refresh hook
+	OnDeploymentChanged.Broadcast();
 }
 
 FText AMatchGameMode::BuildRosterDisplayLabel(APlayerState* ForPS, const FRosterEntry& E) const
@@ -365,18 +385,32 @@ void AMatchGameMode::FillServerLabelsFor(APlayerState* ForPS, TArray<FRosterEntr
 
 void AMatchGameState::Multicast_ApplySelectionVis_Implementation(AUnitBase* NewSel, AUnitBase* NewTgt)
 {
-    // Clear old
-    if (LastSelApplied && LastSelApplied != NewSel)
-        LastSelApplied->SetHighlightLocal(EUnitHighlight::None);
-    if (LastTgtApplied && LastTgtApplied != NewTgt)
-        LastTgtApplied->SetHighlightLocal(EUnitHighlight::None);
+	// Clear old
+	if (LastSelApplied && LastSelApplied != NewSel)
+	{
+		LastSelApplied->SetHighlightLocal(EUnitHighlight::None);
+		LastSelApplied->HideRangePreview(); // NEW
+	}
+	if (LastTgtApplied && LastTgtApplied != NewTgt)
+	{
+		LastTgtApplied->SetHighlightLocal(EUnitHighlight::None);
+		LastTgtApplied->HideRangePreview(); // NEW
+	}
 
-    // Apply new
-    if (NewSel) NewSel->SetHighlightLocal(EUnitHighlight::Friendly);
-    if (NewTgt) NewTgt->SetHighlightLocal(EUnitHighlight::Enemy);
+	// Apply new
+	if (NewSel)
+	{
+		NewSel->SetHighlightLocal(EUnitHighlight::Friendly);
+		NewSel->UpdateRangePreview(/*bAsTargetContext*/false); // NEW
+	}
+	if (NewTgt)
+	{
+		NewTgt->SetHighlightLocal(EUnitHighlight::Enemy);
+		NewTgt->UpdateRangePreview(/*bAsTargetContext*/true); // NEW
+	}
 
-    LastSelApplied = NewSel;
-    LastTgtApplied = NewTgt;
+	LastSelApplied = NewSel;
+	LastTgtApplied = NewTgt;
 
 	OnDeploymentChanged.Broadcast();
 }
@@ -618,6 +652,7 @@ void AMatchGameMode::Handle_MoveUnit(AMatchPlayerController* PC, AUnitBase* Unit
     if (AMatchGameState* S2 = GS())
     {
         S2->SetGlobalSelected(nullptr);
+    	S->Multicast_ApplySelectionVis(S->SelectedUnitGlobal, S->TargetUnitGlobal);
 
         const FString Msg = FString::Printf(
              TEXT("[MoveApply] %s  Spent=%.1f TT-in  NewBudget=%.1f TT-in  %s"),
@@ -668,6 +703,7 @@ void AMatchGameMode::Handle_SelectTarget(AMatchPlayerController* PC, AUnitBase* 
         }
 
         S->SetGlobalTarget(nullptr);
+    	S->Multicast_ApplySelectionVis(S->SelectedUnitGlobal, S->TargetUnitGlobal);
 
         if (S->TurnPhase == ETurnPhase::Shoot)
             BroadcastPotentialTargets(Attacker);
@@ -701,6 +737,7 @@ void AMatchGameMode::Handle_SelectTarget(AMatchPlayerController* PC, AUnitBase* 
 
     S->Multicast_ClearPotentialTargets();
     S->SetGlobalTarget(Target);
+	S->Multicast_ApplySelectionVis(S->SelectedUnitGlobal, S->TargetUnitGlobal);
 
     S->OnDeploymentChanged.Broadcast();
     S->ForceNetUpdate();
@@ -1052,6 +1089,7 @@ void AMatchGameMode::Handle_ConfirmShoot(AMatchPlayerController* PC, AUnitBase* 
 	
     S->SetGlobalTarget(nullptr);
     S->SetGlobalSelected(nullptr);
+	S->Multicast_ApplySelectionVis(S->SelectedUnitGlobal, S->TargetUnitGlobal);
 
     if (IsValid(PC))
     {
@@ -1286,6 +1324,7 @@ void AMatchGameMode::Handle_CancelPreview(AMatchPlayerController* PC, AUnitBase*
         S->Preview.Phase    = S->TurnPhase;
         
         S->SetGlobalTarget(nullptr);
+    	S->Multicast_ApplySelectionVis(S->SelectedUnitGlobal, S->TargetUnitGlobal);
         S->Multicast_ClearPotentialTargets();
         S->OnDeploymentChanged.Broadcast();
         S->ForceNetUpdate();
@@ -1295,6 +1334,12 @@ void AMatchGameMode::Handle_CancelPreview(AMatchPlayerController* PC, AUnitBase*
 void AMatchGameMode::BeginPlay()
 {
     Super::BeginPlay();
+
+	if (AMatchGameState* S = GS())
+	{
+		S->CmPerTTInchRep = CmPerTabletopInch();
+		S->ForceNetUpdate();
+	}
 }
 
 void AMatchGameMode::PostLogin(APlayerController* NewPlayer)
@@ -1564,6 +1609,7 @@ void AMatchGameMode::HandleStartBattle(APlayerController* PC)
         S->SetGlobalSelected(nullptr);
         S->SetGlobalTarget(nullptr);
         S->Multicast_ClearPotentialTargets();
+    	S->Multicast_ApplySelectionVis(S->SelectedUnitGlobal, S->TargetUnitGlobal);
 
         // Recalc objectives ONCE, then award Move-phase AP (with Round1/Move guard inside unit)
         for (TActorIterator<AObjectiveMarker> It(GetWorld()); It; ++It)
@@ -1593,6 +1639,7 @@ void AMatchGameMode::HandleEndPhase(APlayerController* PC)
     S->SetGlobalSelected(nullptr);
     S->SetGlobalTarget(nullptr);
     S->Multicast_ClearPotentialTargets();
+	S->Multicast_ApplySelectionVis(S->SelectedUnitGlobal, S->TargetUnitGlobal);
 
     auto ApplyPhaseStartAP = [&](APlayerState* TurnOwner, ETurnPhase NewPhase)
     {
@@ -1662,6 +1709,7 @@ void AMatchGameMode::HandleEndPhase(APlayerController* PC)
     S->SetGlobalSelected(nullptr);
     S->SetGlobalTarget(nullptr);
     S->Multicast_ClearPotentialTargets();
+	S->Multicast_ApplySelectionVis(S->SelectedUnitGlobal, S->TargetUnitGlobal);
 
     S->OnDeploymentChanged.Broadcast();
     S->ForceNetUpdate();
@@ -1802,6 +1850,7 @@ void AMatchGameMode::BuildMatchSummaryAndReveal()
 
     S->SetGlobalSelected(nullptr);
     S->SetGlobalTarget(nullptr);
+	S->Multicast_ApplySelectionVis(S->SelectedUnitGlobal, S->TargetUnitGlobal);
 
     S->FinalSummary = Sum;
     S->bShowSummary = true;

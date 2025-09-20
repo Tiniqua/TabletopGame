@@ -113,6 +113,9 @@ public:
 	UFUNCTION()
 	void OnRep_SelectionVis();
 
+	UPROPERTY(Replicated, BlueprintReadOnly, Category="Scale")
+	float CmPerTTInchRep = 50.8f; // uses 20*2.54 from -- float CmPerTabletopInch() const { return 2.54f * TabletopToUnrealInchScale; }
+
 	UFUNCTION(NetMulticast, Reliable)
 	void Multicast_ApplySelectionVis(class AUnitBase* NewSel, class AUnitBase* NewTgt);
 	
@@ -145,7 +148,7 @@ public:
 	
 	void SetFinalSummary(const FMatchSummary& In) { FinalSummary = In; OnRep_FinalSummary(); ForceNetUpdate(); }
 	
-	UFUNCTION() void OnRep_Match(){ OnDeploymentChanged.Broadcast(); }
+	UFUNCTION() void OnRep_Match();
 	
 	UFUNCTION(BlueprintPure, Category="Teams")
 	ATabletopPlayerState* GetPSForTeam(int32 TeamNum) const;

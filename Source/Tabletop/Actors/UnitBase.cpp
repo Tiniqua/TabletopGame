@@ -33,17 +33,156 @@ AUnitBase::AUnitBase()
 
     ActionPoints = CreateDefaultSubobject<UUnitActionResourceComponent>(TEXT("ActionPoints"));
     ActionPoints->SetIsReplicated(true);
+
+    RangeDecal = CreateDefaultSubobject<UDecalComponent>(TEXT("RangeDecal"));
+    RangeDecal->SetupAttachment(RootComponent);
+    RangeDecal->SetRelativeRotation(FRotator(-90.f, 0.f, 0.f)); // project down onto ground
+    RangeDecal->DecalSize = FVector(100.f, 100.f, RangeDecalThickness); // X/Y as radius cm (we’ll overwrite)
+    RangeDecal->SetVisibility(false);
+    RangeDecal->SetHiddenInGame(true);
+    RangeDecal->SetFadeScreenSize(0.f); // don’t auto-fade
+    //RangeDecal->rece = false; // this component is a decal, not a receiver
+
+    // Optional invisible probe if you want proximity queries later
+    RangeProbe = CreateDefaultSubobject<USphereComponent>(TEXT("RangeProbe"));
+    RangeProbe->SetupAttachment(RootComponent);
+    RangeProbe->InitSphereRadius(100.f);
+    RangeProbe->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+    RangeProbe->SetVisibility(false);
+    RangeProbe->SetHiddenInGame(true);
 }
 
 void AUnitBase::BeginPlay()
 {
     Super::BeginPlay();
     EnsureRuntimeBuilt();
+    EnsureRangeDecal();
+
     if (HasAuthority())
     {
         RebuildFormation();
     }
 }
+
+void AUnitBase::EnsureRangeDecal()
+{
+    if (!RangeDecal) return;
+
+    if (RangeDecalMaterial && !RangeMID)
+    {
+        RangeMID = UMaterialInstanceDynamic::Create(RangeDecalMaterial, this);
+        RangeDecal->SetDecalMaterial(RangeMID);
+        // If your decal material exposes params:
+        if (RangeMID && RangeMID->IsValidLowLevel())
+        {
+            RangeMID->SetScalarParameterValue(TEXT("RingSoftness"), RingSoftness);
+            // Color comes per-context; we set it when showing
+        }
+    }
+}
+
+float AUnitBase::GetCmPerTTInch_Safe() const
+{
+    // Prefer GameMode (server), else a replicated fallback on GameState, else constant 50.8 cm/inch
+    if (AMatchGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<AMatchGameMode>() : nullptr)
+        return GM->CmPerTabletopInch();
+    if (const AMatchGameState* GS = GetWorld() ? GetWorld()->GetGameState<AMatchGameState>() : nullptr)
+    {
+        return GS->CmPerTTInchRep;
+    }
+       
+    return 50.8f;
+}
+
+void AUnitBase::SetRangeVisible(float RadiusCm, const FLinearColor& Color, ERangeVizMode Mode)
+{
+    EnsureRangeDecal();
+    if (!RangeDecal) return;
+
+    if (RadiusCm <= KINDA_SMALL_NUMBER)
+    {
+        HideRangePreview();
+        return;
+    }
+
+    // Size decal: X/Y are extents in cm (radius); Z is thickness
+    RangeDecal->DecalSize = FVector(RangeDecalThickness, RadiusCm, RadiusCm);
+    RangeDecal->SetRelativeLocation(FVector(0.f, 0.f, 5.f)); // small lift to avoid z-fight
+
+    if (RangeMID)
+    {
+        RangeMID->SetVectorParameterValue(TEXT("TintColor"), Color);
+        // If you prefer parameterized radius instead of DecalSize scaling:
+        RangeMID->SetScalarParameterValue(TEXT("RadiusCm"), RadiusCm);
+    }
+
+    // Optional probe (kept hidden)
+    if (RangeProbe) RangeProbe->SetSphereRadius(RadiusCm);
+
+    RangeDecal->SetVisibility(true);
+    RangeDecal->SetHiddenInGame(false);
+    CurrentRangeMode = Mode;
+}
+
+void AUnitBase::HideRangePreview()
+{
+    if (RangeDecal)
+    {
+        RangeDecal->SetVisibility(false);
+        RangeDecal->SetHiddenInGame(true);
+    }
+    CurrentRangeMode = ERangeVizMode::None;
+}
+
+void AUnitBase::UpdateRangePreview(bool bAsTargetContext)
+{
+    const AMatchGameState* S = GetWorld() ? GetWorld()->GetGameState<AMatchGameState>() : nullptr;
+    if (!S) { HideRangePreview(); return; }
+
+    const float cmPer = GetCmPerTTInch_Safe();
+
+    float radiusCm = 0.f;
+    ERangeVizMode mode = ERangeVizMode::None;
+
+    if (S->Phase == EMatchPhase::Battle)
+    {
+        if (S->TurnPhase == ETurnPhase::Move)
+        {
+            radiusCm = FMath::Max(0.f, MoveBudgetInches) * cmPer;
+            mode = ERangeVizMode::Move;
+        }
+        else if (S->TurnPhase == ETurnPhase::Shoot)
+        {
+            radiusCm = FMath::Max(0, WeaponRangeInchesRep) * cmPer;
+            mode = ERangeVizMode::Shoot;
+        }
+    }
+
+    const bool bEnemy = bAsTargetContext; // treat target ring as “enemy” color
+    const FLinearColor col = bEnemy ? EnemyColor : FriendlyColor;
+
+    if (radiusCm > 0.f) SetRangeVisible(radiusCm, col, mode);
+    else HideRangePreview();
+}
+
+void AUnitBase::RefreshRangeIfActive()
+{
+    if (CurrentRangeMode == ERangeVizMode::None) return;
+
+    const AMatchGameState* S = GetWorld() ? GetWorld()->GetGameState<AMatchGameState>() : nullptr;
+    if (!S) return;
+
+    const bool bAsTarget = (S->TargetUnitGlobal == this);
+    const bool bAsSel    = (S->SelectedUnitGlobal == this);
+
+    if (!bAsTarget && !bAsSel)
+    {
+        HideRangePreview();
+        return;
+    }
+    UpdateRangePreview(/*bAsTargetContext*/ bAsTarget);
+}
+
 
 /** Server-only init from DataTable row */
 void AUnitBase::Server_InitFromRow(APlayerState* OwnerPS, const FUnitRow& Row, int32 InWeaponIndex)
@@ -247,13 +386,6 @@ void AUnitBase::SyncWeaponSnapshotsFromCurrent()
     WeaponSkillToHitRep  = CurrentWeapon.SkillToHit;
     WeaponStrengthRep    = CurrentWeapon.Strength;
     WeaponAPRep          = CurrentWeapon.AP;
-}
-
-void AUnitBase::OnRep_CurrentWeapon()
-{
-    // Keep cached ints consistent on clients
-    SyncWeaponSnapshotsFromCurrent();
-    RebuildRuntimeActions();
 }
 
 void AUnitBase::ApplyAPPhaseStart(ETurnPhase Phase)
@@ -640,6 +772,14 @@ void AUnitBase::OnRep_Move()
 {
     OnMoveChanged.Broadcast();
     EnsureRuntimeBuilt();
+    RefreshRangeIfActive();
+}
+
+void AUnitBase::OnRep_CurrentWeapon()
+{
+    SyncWeaponSnapshotsFromCurrent();
+    RebuildRuntimeActions();
+    RefreshRangeIfActive();
 }
 
 void AUnitBase::NotifyMoveChanged()
