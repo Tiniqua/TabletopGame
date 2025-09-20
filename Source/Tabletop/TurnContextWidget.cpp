@@ -3,6 +3,7 @@
 #include "ActionButtonWidget.h"
 #include "KeywordChipWidget.h"
 #include "LibraryHelpers.h"
+#include "WeaponDisplayText.h"
 #include "WeaponKeywordHelpers.h"
 
 #include "Components/PanelWidget.h"
@@ -111,8 +112,9 @@ void UTurnContextWidget::Refresh()
     const bool bBattle  = S && S->Phase == EMatchPhase::Battle;
     const ETurnPhase Ph = bBattle ? S->TurnPhase : ETurnPhase::Move;
 
-    // Attacker info + AP
+    // Attacker info + AP + loadout
     FillAttacker(Sel);
+    FillWeaponLoadout(Sel);
     UpdateActionPoints();
 
     AUnitBase* PreviewAttacker = nullptr;
@@ -424,6 +426,61 @@ void UTurnContextWidget::RebuildKeywordChips(const TArray<FKeywordUIInfo>& Infos
 }
 
 // ---------------- fills ----------------
+
+void UTurnContextWidget::FillWeaponLoadout(AUnitBase* U)
+{
+    if (!WeaponNameText && !WeaponStatsText && !WeaponKeywordsText &&
+        !WeaponAbilitiesText && !UnitAbilitiesText)
+    {
+        return;
+    }
+
+    const auto ClearLoadoutTexts = [this]()
+    {
+        if (WeaponNameText)      WeaponNameText->SetText(FText::GetEmpty());
+        if (WeaponStatsText)     WeaponStatsText->SetText(FText::GetEmpty());
+        if (WeaponKeywordsText)  WeaponKeywordsText->SetText(FText::GetEmpty());
+        if (WeaponAbilitiesText) WeaponAbilitiesText->SetText(FText::GetEmpty());
+        if (UnitAbilitiesText)   UnitAbilitiesText->SetText(FText::GetEmpty());
+    };
+
+    if (!U)
+    {
+        ClearLoadoutTexts();
+        return;
+    }
+
+    const FWeaponProfile& Weapon = U->GetActiveWeaponProfile();
+
+    if (WeaponNameText)
+    {
+        WeaponNameText->SetText(Weapon.WeaponId.IsNone()
+            ? FText::GetEmpty()
+            : FText::FromName(Weapon.WeaponId));
+    }
+
+    if (WeaponStatsText)
+    {
+        WeaponStatsText->SetText(FText::FromString(WeaponDisplayText::FormatWeaponStats(Weapon)));
+    }
+
+    if (WeaponKeywordsText)
+    {
+        WeaponKeywordsText->SetText(FText::FromString(WeaponDisplayText::FormatWeaponKeywords(Weapon.Keywords)));
+    }
+
+    if (WeaponAbilitiesText)
+    {
+        WeaponAbilitiesText->SetText(FText::FromString(
+            WeaponDisplayText::FormatAbilityList(Weapon.AbilityClasses, TEXT("Weapon Abilities"))));
+    }
+
+    if (UnitAbilitiesText)
+    {
+        UnitAbilitiesText->SetText(FText::FromString(
+            WeaponDisplayText::FormatAbilityList(U->AbilityClassesRep, TEXT("Unit Abilities"))));
+    }
+}
 
 void UTurnContextWidget::FillAttacker(AUnitBase* U)
 {

@@ -133,6 +133,7 @@ void AUnitBase::OnRep_ActionUsage()
             S->OnDeploymentChanged.Broadcast();
 
     EnsureRuntimeBuilt();
+    NotifyStatusChanged();
 }
 
 bool AUnitBase::CanUseActionNow(const FActionDescriptor& D) const
@@ -500,6 +501,7 @@ void AUnitBase::ApplyDamage_Server(int32 Damage)
     }
 
     ForceNetUpdate();
+    NotifyStatusChanged();
 }
 
 void AUnitBase::ApplyMortalDamage_Server(int32 Damage)
@@ -515,6 +517,7 @@ void AUnitBase::OnDamaged(int32 ModelsLost, int32 /*WoundsOverflow*/)
     ModelsCurrent = FMath::Clamp(ModelsCurrent - FMath::Max(0, ModelsLost), 0, ModelsMax);
     RebuildFormation();
     ForceNetUpdate();
+    NotifyStatusChanged();
 }
 
 void AUnitBase::OnRep_Health()
@@ -528,11 +531,29 @@ void AUnitBase::OnRep_Health()
         ModelsCurrent = NewModels;
     }
     RebuildFormation();
+    NotifyStatusChanged();
 }
 
 void AUnitBase::AddUnitModifier(const FUnitModifier& Mod)
 {
     ActiveCombatMods.Add(Mod);
+    NotifyStatusChanged();
+    ForceNetUpdate();
+}
+
+void AUnitBase::OnRep_ActiveCombatMods()
+{
+    NotifyStatusChanged();
+}
+
+void AUnitBase::OnRep_OverwatchArmed()
+{
+    NotifyStatusChanged();
+}
+
+void AUnitBase::NotifyStatusChanged()
+{
+    OnUnitStatusChanged.Broadcast();
 }
 
 static bool MatchesRole(const FUnitModifier& M, bool bAsAttacker)
@@ -584,6 +605,8 @@ void AUnitBase::OnTurnAdvanced()
         if (M.Expiry == EModifierExpiry::UntilEndOfTurn && --M.TurnsRemaining <= 0)
             ActiveCombatMods.RemoveAtSwap(i);
     }
+    NotifyStatusChanged();
+    ForceNetUpdate();
 }
 
 void AUnitBase::OnRoundAdvanced()
@@ -594,6 +617,8 @@ void AUnitBase::OnRoundAdvanced()
         if (M.Expiry == EModifierExpiry::UntilEndOfRound && --M.TurnsRemaining <= 0)
             ActiveCombatMods.RemoveAtSwap(i);
     }
+    NotifyStatusChanged();
+    ForceNetUpdate();
 }
 void AUnitBase::ApplyOutlineToAllModels(UMaterialInterface* Mat)
 {
@@ -640,6 +665,7 @@ void AUnitBase::OnRep_Move()
 {
     // Hook for UI if needed
     EnsureRuntimeBuilt();
+    NotifyStatusChanged();
 }
 
 void AUnitBase::RebuildRuntimeAbilitiesFromSources()

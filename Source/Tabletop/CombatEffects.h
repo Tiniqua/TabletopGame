@@ -124,6 +124,12 @@ struct FUnitModifier
     UPROPERTY(EditAnywhere, BlueprintReadWrite) ECombatEvent   AppliesAt = ECombatEvent::PreHitCalc;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) EModifierTarget Targeting = EModifierTarget::OwnerAlways;
 
+    /** Optional source identifier so UI can group/describe this modifier */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) FName SourceId = NAME_None;
+
+    /** Optional display label (used for worldspace/status UI). Leave empty to hide. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) FText DisplayName;
+
     // The actual roll mods to contribute at that stage
     UPROPERTY(EditAnywhere, BlueprintReadWrite) FRollModifiers Mods;
 

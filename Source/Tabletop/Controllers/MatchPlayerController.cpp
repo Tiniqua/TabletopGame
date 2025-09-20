@@ -13,6 +13,8 @@
 #include "Tabletop/Actors/UnitAction.h"
 #include "Tabletop/Actors/UnitBase.h"
 #include "Tabletop/Gamemodes/MatchGameMode.h"
+#include "Tabletop/WorldspaceUnitStatusActor.h"
+#include "Tabletop/Actors/CoverVolume.h"
 
 
 AMatchGameState* AMatchPlayerController::GS() const
@@ -22,13 +24,15 @@ AMatchGameState* AMatchPlayerController::GS() const
 
 void AMatchPlayerController::BeginPlay()
 {
-	Super::BeginPlay();
+        Super::BeginPlay();
 
-	// UI input
-	bShowMouseCursor = true;
-	FInputModeGameAndUI Mode;
-	Mode.SetHideCursorDuringCapture(false);
-	Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+        OnSelectedChanged.AddDynamic(this, &AMatchPlayerController::HandleSelectedChanged_Worldspace);
+
+        // UI input
+        bShowMouseCursor = true;
+        FInputModeGameAndUI Mode;
+        Mode.SetHideCursorDuringCapture(false);
+        Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
 	SetInputMode(Mode);
 
 	// Bind now or retry until GS exists
@@ -39,12 +43,14 @@ void AMatchPlayerController::BeginPlay()
 			BindGSTimer, this, &AMatchPlayerController::TryBindToGameState, 0.5f, true, 0.5f);
 	}
 
-	if (AMatchGameState* S = GS())
-	{
-		S->OnDeploymentChanged.Broadcast();
-	}
+        if (AMatchGameState* S = GS())
+        {
+                S->OnDeploymentChanged.Broadcast();
+        }
 
-	RefreshPhaseUI();
+        RefreshPhaseUI();
+        EnsureWorldspaceStatusActors();
+        UpdateWorldspaceIndicators();
 }
 
 void AMatchPlayerController::Server_ExecuteAction_Implementation(AUnitBase* Unit, FName ActionId, FActionRuntimeArgs Args)
@@ -354,20 +360,21 @@ void AMatchPlayerController::TryBindToGameState()
 }
 void AMatchPlayerController::OnPhaseSignalChanged()
 {
-	RefreshPhaseUI();
+        RefreshPhaseUI();
+        UpdateWorldspaceIndicators();
 }
 
 void AMatchPlayerController::RefreshPhaseUI()
 {
-	AMatchGameState* State = GS();
+        AMatchGameState* State = GS();
 
-	if (!State)
-	{
-		ShowWidgetTyped(DeploymentWidgetInstance, DeploymentWidgetClass, false);
-		ShowWidgetTyped(GameplayWidgetInstance,   GameplayWidgetClass,   false);
-		Client_HideSummary();
-		return;
-	}
+        if (!State)
+        {
+                ShowWidgetTyped(DeploymentWidgetInstance, DeploymentWidgetClass, false);
+                ShowWidgetTyped(GameplayWidgetInstance,   GameplayWidgetClass,   false);
+                Client_HideSummary();
+                return;
+        }
 
 	const bool bDeployment = (State->Phase == EMatchPhase::Deployment);
 	const bool bBattle     = (State->Phase == EMatchPhase::Battle);
@@ -387,8 +394,98 @@ void AMatchPlayerController::RefreshPhaseUI()
 	Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
 	SetShowMouseCursor(true);
 	bShowMouseCursor = true;
-	SetInputMode(Mode);
+        SetInputMode(Mode);
 
+}
+
+void AMatchPlayerController::EnsureWorldspaceStatusActors()
+{
+        if (!WorldspaceStatusWidgetClass)
+        {
+                if (SelectedStatusActor)
+                {
+                        SelectedStatusActor->Destroy();
+                        SelectedStatusActor = nullptr;
+                }
+                if (TargetStatusActor)
+                {
+                        TargetStatusActor->Destroy();
+                        TargetStatusActor = nullptr;
+                }
+                return;
+        }
+
+        UWorld* World = GetWorld();
+        if (!World)
+        {
+                return;
+        }
+
+        auto SpawnOrInit = [&](AWorldspaceUnitStatusActor*& Slot)
+        {
+                if (!Slot)
+                {
+                        FActorSpawnParameters Params;
+                        Params.Owner = this;
+                        Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+                        Slot = World->SpawnActor<AWorldspaceUnitStatusActor>(AWorldspaceUnitStatusActor::StaticClass(), FTransform::Identity, Params);
+                }
+                if (Slot)
+                {
+                        Slot->InitializeIndicator(this, WorldspaceStatusWidgetClass);
+                }
+        };
+
+        SpawnOrInit(SelectedStatusActor);
+        SpawnOrInit(TargetStatusActor);
+}
+
+void AMatchPlayerController::UpdateWorldspaceIndicators()
+{
+        EnsureWorldspaceStatusActors();
+
+        if (!WorldspaceStatusWidgetClass)
+        {
+                return;
+        }
+
+        if (SelectedStatusActor)
+        {
+                SelectedStatusActor->SetObservedUnit(SelectedUnit);
+                SelectedStatusActor->SetCoverInfo(ECoverType::None, false);
+        }
+
+        AUnitBase* TargetUnit = nullptr;
+        ECoverType CoverType = ECoverType::None;
+        bool bHasCover = false;
+
+        if (AMatchGameState* State = GS())
+        {
+                if (State->ActionPreview.Attacker == SelectedUnit && State->ActionPreview.Target)
+                {
+                        TargetUnit = State->ActionPreview.Target;
+                        CoverType = State->ActionPreview.Cover;
+                        bHasCover = true;
+                }
+                else if (State->Preview.Attacker == SelectedUnit && State->Preview.Target)
+                {
+                        TargetUnit = State->Preview.Target;
+                        CoverType = ECoverType::None;
+                        bHasCover = false;
+                }
+                else if (State->TargetUnitGlobal && State->TargetUnitGlobal != SelectedUnit)
+                {
+                        TargetUnit = State->TargetUnitGlobal;
+                        CoverType = ECoverType::None;
+                        bHasCover = false;
+                }
+        }
+
+        if (TargetStatusActor)
+        {
+                TargetStatusActor->SetObservedUnit(TargetUnit);
+                TargetStatusActor->SetCoverInfo(CoverType, bHasCover);
+        }
 }
 
 bool AMatchPlayerController::TraceGround(FHitResult& OutHit, TEnumAsByte<ECollisionChannel> Channel) const
@@ -412,16 +509,21 @@ AUnitBase* AMatchPlayerController::TraceUnit() const
 
 void AMatchPlayerController::SelectUnit(AUnitBase* U)
 {
-	if (SelectedUnit == U) return;
+        if (SelectedUnit == U) return;
 
-	if (SelectedUnit) SelectedUnit->OnDeselected();
-	SelectedUnit = U;
-	if (SelectedUnit) SelectedUnit->OnSelected();
+        if (SelectedUnit) SelectedUnit->OnDeselected();
+        SelectedUnit = U;
+        if (SelectedUnit) SelectedUnit->OnSelected();
 
-	OnSelectedChanged.Broadcast(SelectedUnit);
-	SetSelectedUnit(U);
+        OnSelectedChanged.Broadcast(SelectedUnit);
+        SetSelectedUnit(U);
 
-	Server_SetGlobalSelectedUnit(U);
+        Server_SetGlobalSelectedUnit(U);
+}
+
+void AMatchPlayerController::HandleSelectedChanged_Worldspace(AUnitBase* /*NewSelection*/)
+{
+        UpdateWorldspaceIndicators();
 }
 
 void AMatchPlayerController::ClearSelection()
@@ -449,12 +551,23 @@ void AMatchPlayerController::Client_ClearSelectionAfterConfirm_Implementation()
 
 void AMatchPlayerController::EndPlay(const EEndPlayReason::Type Reason)
 {
-	if (BoundGS.IsValid())
-	{
-		BoundGS->OnDeploymentChanged.RemoveDynamic(this, &AMatchPlayerController::OnPhaseSignalChanged);
-		BoundGS.Reset();
-	}
-	Super::EndPlay(Reason);
+        if (BoundGS.IsValid())
+        {
+                BoundGS->OnDeploymentChanged.RemoveDynamic(this, &AMatchPlayerController::OnPhaseSignalChanged);
+                BoundGS.Reset();
+        }
+        OnSelectedChanged.RemoveDynamic(this, &AMatchPlayerController::HandleSelectedChanged_Worldspace);
+        if (SelectedStatusActor)
+        {
+                SelectedStatusActor->Destroy();
+                SelectedStatusActor = nullptr;
+        }
+        if (TargetStatusActor)
+        {
+                TargetStatusActor->Destroy();
+                TargetStatusActor = nullptr;
+        }
+        Super::EndPlay(Reason);
 }
 
 void AMatchPlayerController::Server_RequestDeploy_Implementation(FName UnitId, const FTransform& Where, int32 WeaponIndex)

@@ -37,6 +37,12 @@ protected:
     UPROPERTY(meta=(BindWidget)) UTextBlock* AttackerAttacksText = nullptr;
     UPROPERTY(meta=(BindWidget)) UTextBlock* AttackerDamageText  = nullptr;
 
+    UPROPERTY(meta=(BindWidgetOptional)) UTextBlock* WeaponNameText       = nullptr;
+    UPROPERTY(meta=(BindWidgetOptional)) UTextBlock* WeaponStatsText      = nullptr;
+    UPROPERTY(meta=(BindWidgetOptional)) UTextBlock* WeaponKeywordsText   = nullptr;
+    UPROPERTY(meta=(BindWidgetOptional)) UTextBlock* WeaponAbilitiesText  = nullptr;
+    UPROPERTY(meta=(BindWidgetOptional)) UTextBlock* UnitAbilitiesText    = nullptr;
+
     UPROPERTY(meta=(BindWidgetOptional)) UTextBlock*  APText       = nullptr;
     UPROPERTY(meta=(BindWidgetOptional)) UPanelWidget* ActionsPanel = nullptr;
 
@@ -71,6 +77,7 @@ protected:
     void RebuildActionButtons(AUnitBase* Sel);
 
     void FillAttacker(AUnitBase* U);
+    void FillWeaponLoadout(AUnitBase* U);
     void FillTarget(AUnitBase* U);
     void ClearTargetFields();
 

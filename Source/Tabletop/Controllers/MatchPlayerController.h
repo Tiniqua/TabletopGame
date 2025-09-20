@@ -14,6 +14,8 @@ class AUnitBase;
 class AMatchGameState;
 class UDeploymentWidget;
 class UGameplayWidget;
+class AWorldspaceUnitStatusActor;
+class UWorldspaceUnitStatusWidget;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnSelectedChanged, class AUnitBase*, NewSelection);
 
@@ -62,11 +64,13 @@ public:
 	UFUNCTION(BlueprintCallable) void ExitTargetMode()  { bTargetMode = false; }
 	
 	UFUNCTION(Client, Reliable)
-	void Client_KickUIRefresh();
-	
-	virtual void BeginPlay() override;
-	void SetSelectedUnit(AUnitBase* NewSel);
-	virtual void SetupInputComponent() override;
+        void Client_KickUIRefresh();
+
+        virtual void BeginPlay() override;
+        void SetSelectedUnit(AUnitBase* NewSel);
+        UFUNCTION()
+        void HandleSelectedChanged_Worldspace(AUnitBase* NewSelection);
+        virtual void SetupInputComponent() override;
 
 	UFUNCTION(BlueprintCallable)
 	void BeginDeployForUnit(FName UnitId,int32 InWeaponIndex);
@@ -95,19 +99,30 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="UI")
 	TSubclassOf<UDeploymentWidget> DeploymentWidgetClass;
 
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="UI")
-	TSubclassOf<UGameplayWidget>  GameplayWidgetClass;
-	
-	UPROPERTY() UDeploymentWidget* DeploymentWidgetInstance = nullptr;
-	UPROPERTY() UGameplayWidget*   GameplayWidgetInstance   = nullptr;
+        UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="UI")
+        TSubclassOf<UGameplayWidget>  GameplayWidgetClass;
+
+        UPROPERTY() UDeploymentWidget* DeploymentWidgetInstance = nullptr;
+        UPROPERTY() UGameplayWidget*   GameplayWidgetInstance   = nullptr;
+
+        UPROPERTY(EditDefaultsOnly, Category="UI|Worldspace")
+        TSubclassOf<UWorldspaceUnitStatusWidget> WorldspaceStatusWidgetClass;
+
+        UPROPERTY()
+        AWorldspaceUnitStatusActor* SelectedStatusActor = nullptr;
+
+        UPROPERTY()
+        AWorldspaceUnitStatusActor* TargetStatusActor = nullptr;
 	
 	// ——— Phase / GS plumbing ———
-	UFUNCTION() void OnPhaseSignalChanged(); // bound to GS
-	void TryBindToGameState();
-	void RefreshPhaseUI();
+        UFUNCTION() void OnPhaseSignalChanged(); // bound to GS
+        void TryBindToGameState();
+        void RefreshPhaseUI();
+        void EnsureWorldspaceStatusActors();
+        void UpdateWorldspaceIndicators();
 
-	UFUNCTION(Client, Reliable)
-	void Client_KickPhaseRefresh();
+        UFUNCTION(Client, Reliable)
+        void Client_KickPhaseRefresh();
 
 	UFUNCTION(Client, Reliable)
 	void Client_ClearSelectionAfterConfirm();

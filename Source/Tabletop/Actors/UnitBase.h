@@ -44,6 +44,8 @@ struct FActionUsageEntry
     UPROPERTY() int16  PerMatch = 0;
 };
 
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnUnitStatusChanged);
+
 UCLASS()
 class TABLETOP_API AUnitBase : public AActor
 {
@@ -105,9 +107,16 @@ public:
     // Chosen weapon index within the row (server sets, clients read)
     UPROPERTY(Replicated) int32 WeaponIndex = 0;
 
+    // Broadcast when wounds/modifiers/overwatch/etc. change so UI can refresh
+    UPROPERTY(BlueprintAssignable, Category="Status")
+    FOnUnitStatusChanged OnUnitStatusChanged;
+
     // Active combat mods (REPLICATED so clients can preview/visualize)
-    UPROPERTY(Replicated, BlueprintReadOnly)
+    UPROPERTY(ReplicatedUsing=OnRep_ActiveCombatMods, BlueprintReadOnly)
     TArray<FUnitModifier> ActiveCombatMods;
+
+    UFUNCTION()
+    void OnRep_ActiveCombatMods();
 
     // Track move/advance this turn (REPLICATED for preview & keyword logic)
     UPROPERTY(Replicated, BlueprintReadOnly) bool bMovedThisTurn = false;
@@ -154,8 +163,11 @@ public:
     UPROPERTY(Replicated, BlueprintReadOnly, Category="Stats|Defense")
     int32 FeelNoPainRep = 7;
 
-    UPROPERTY(Replicated, BlueprintReadOnly)
+    UPROPERTY(ReplicatedUsing=OnRep_OverwatchArmed, BlueprintReadOnly)
     bool bOverwatchArmed = false;
+
+    UFUNCTION()
+    void OnRep_OverwatchArmed();
     
     UFUNCTION(BlueprintPure) int32 GetInvuln() const { return InvulnerableSaveRep; }
     UFUNCTION(BlueprintPure) int32 GetFeelNoPain() const { return FeelNoPainRep; }
@@ -179,6 +191,8 @@ public:
     void ConsumeForStage(ECombatEvent Stage, bool bAsAttacker);
     void OnTurnAdvanced();
     void OnRoundAdvanced();
+
+    void NotifyStatusChanged();
 
     UFUNCTION() void OnRep_Health();
     

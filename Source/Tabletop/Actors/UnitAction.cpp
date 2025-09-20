@@ -224,16 +224,17 @@ void UAction_Overwatch::Execute_Implementation(AUnitBase* Unit, const FActionRun
 	if (!Unit) return;
 	if (!PayAP(Unit)) return;
 
-	if (Unit->HasAuthority())
-	{
-		Unit->bOverwatchArmed = true;   // arm it
-		Unit->BumpUsage(Desc);
-		Unit->ForceNetUpdate();
+        if (Unit->HasAuthority())
+        {
+                Unit->bOverwatchArmed = true;   // arm it
+                Unit->BumpUsage(Desc);
+                Unit->ForceNetUpdate();
+                Unit->NotifyStatusChanged();
 
-		if (AMatchGameState* S = Unit->GetWorld()->GetGameState<AMatchGameState>())
-		{
-			S->Multicast_ScreenMsg(FString::Printf(TEXT("%s is on Overwatch."), *Unit->GetName()), FColor::Cyan, 2.0f);
-		}
+                if (AMatchGameState* S = Unit->GetWorld()->GetGameState<AMatchGameState>())
+                {
+                        S->Multicast_ScreenMsg(FString::Printf(TEXT("%s is on Overwatch."), *Unit->GetName()), FColor::Cyan, 2.0f);
+                }
 	}
 }
 
@@ -253,11 +254,12 @@ void UAction_Overwatch::OnAnyEvent(const FAbilityEventContext& Ctx)
 		// Range/LOS using your existing gate
 		if (GM->ValidateShoot(Watcher, Mover))
 		{
-			GM->Handle_OverwatchShot(Watcher, Mover);  // authority resolves
-			Watcher->bOverwatchArmed = false;          // consume
-			Watcher->ForceNetUpdate();
-		}
-	}
+                        GM->Handle_OverwatchShot(Watcher, Mover);  // authority resolves
+                        Watcher->bOverwatchArmed = false;          // consume
+                        Watcher->ForceNetUpdate();
+                        Watcher->NotifyStatusChanged();
+                }
+        }
 }
 
 
@@ -273,21 +275,23 @@ UAction_TakeAim::UAction_TakeAim()
 
 void UAction_TakeAim::Execute_Implementation(AUnitBase* U, const FActionRuntimeArgs& /*Args*/)
 {
-	if (!U) return;
-	if (!PayAP(U)) return;
+        if (!U) return;
+        if (!PayAP(U)) return;
 
-	FUnitModifier M;
-	M.AppliesAt              = ECombatEvent::PreHitCalc;
-	M.Targeting              = EModifierTarget::OwnerWhenAttacking;
-	M.Mods.HitNeedOffset     = -1;              // +1 to hit
-	M.Expiry                 = EModifierExpiry::NextNOwnerShots;
-	M.UsesRemaining          = 1;
+        FUnitModifier M;
+        M.AppliesAt              = ECombatEvent::PreHitCalc;
+        M.Targeting              = EModifierTarget::OwnerWhenAttacking;
+        M.Mods.HitNeedOffset     = -1;              // +1 to hit
+        M.Expiry                 = EModifierExpiry::NextNOwnerShots;
+        M.UsesRemaining          = 1;
+        M.SourceId               = Desc.ActionId;
+        M.DisplayName            = Desc.DisplayName;
 
-	U->AddUnitModifier(M);
-	if (U->HasAuthority())
-	{
-		U->BumpUsage(Desc);
-	}
+        U->AddUnitModifier(M);
+        if (U->HasAuthority())
+        {
+                U->BumpUsage(Desc);
+        }
 }
 
 
@@ -309,21 +313,23 @@ bool UAction_Hunker::CanExecute_Implementation(AUnitBase* Unit, const FActionRun
 
 void UAction_Hunker::Execute_Implementation(AUnitBase* Unit, const FActionRuntimeArgs& Args)
 {
-	if (!Unit) return;
-	if (!PayAP(Unit)) return;
+        if (!Unit) return;
+        if (!PayAP(Unit)) return;
 
-	FUnitModifier M;
-	M.AppliesAt              = ECombatEvent::PostDamageCompute;      // right before FNP application in your pipeline
-	M.Targeting              = EModifierTarget::OwnerWhenDefending;
-	M.Mods.FnpNeedOffset     = -1;                                   // make FNP 1 pip easier
-	M.Expiry                 = EModifierExpiry::UntilEndOfTurn;
-	M.TurnsRemaining         = 1;
+        FUnitModifier M;
+        M.AppliesAt              = ECombatEvent::PostDamageCompute;      // right before FNP application in your pipeline
+        M.Targeting              = EModifierTarget::OwnerWhenDefending;
+        M.Mods.FnpNeedOffset     = -1;                                   // make FNP 1 pip easier
+        M.Expiry                 = EModifierExpiry::UntilEndOfTurn;
+        M.TurnsRemaining         = 1;
+        M.SourceId               = Desc.ActionId;
+        M.DisplayName            = Desc.DisplayName;
 
-	Unit->AddUnitModifier(M);
-	if (Unit->HasAuthority())
-	{
-		Unit->BumpUsage(Desc);
-	}
+        Unit->AddUnitModifier(M);
+        if (Unit->HasAuthority())
+        {
+                Unit->BumpUsage(Desc);
+        }
 }
 
 
@@ -341,21 +347,23 @@ UAction_Brace::UAction_Brace()
 
 void UAction_Brace::Execute_Implementation(AUnitBase* U, const FActionRuntimeArgs& /*Args*/)
 {
-	if (!U) return;
-	if (!PayAP(U)) return;
+        if (!U) return;
+        if (!PayAP(U)) return;
 
-	FUnitModifier M;
-	M.AppliesAt               = ECombatEvent::PreSavingThrows;     // where invuln is applied
-	M.Targeting               = EModifierTarget::OwnerWhenDefending;
-	M.Mods.InvulnNeedOffset   = -1;                                // e.g. 4++ -> 3++
-	M.Expiry                  = EModifierExpiry::UntilEndOfTurn;
-	M.TurnsRemaining          = 1;
+        FUnitModifier M;
+        M.AppliesAt               = ECombatEvent::PreSavingThrows;     // where invuln is applied
+        M.Targeting               = EModifierTarget::OwnerWhenDefending;
+        M.Mods.InvulnNeedOffset   = -1;                                // e.g. 4++ -> 3++
+        M.Expiry                  = EModifierExpiry::UntilEndOfTurn;
+        M.TurnsRemaining          = 1;
+        M.SourceId                = Desc.ActionId;
+        M.DisplayName             = Desc.DisplayName;
 
-	U->AddUnitModifier(M);
-	if (U->HasAuthority())
-	{
-		U->BumpUsage(Desc);
-	}
+        U->AddUnitModifier(M);
+        if (U->HasAuthority())
+        {
+                U->BumpUsage(Desc);
+        }
 }
 
 
