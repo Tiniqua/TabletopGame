@@ -21,6 +21,14 @@ public:
 
 	UFUNCTION(Server, Reliable)
 	void Server_SetDisplayName(const FString& InName);
+
+	virtual void BeginPlayingState() override;
+
+	UFUNCTION(Server, Reliable)
+	void Server_ReportClientWorldReady(FName WorldPackageName);
+
+	UPROPERTY()
+	FName LastReportedMap;
 	
 	virtual void BeginPlay() override;
 	

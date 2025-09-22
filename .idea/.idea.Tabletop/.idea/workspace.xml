@@ -16,8 +16,16 @@
   <component name="HighlightingSettingsPerFile">
     <setting file="file://$PROJECT_DIR$/Plugins/AdvancedSessions/Source/AdvancedSessions/AdvancedSessions.Build.cs" root0="FORCE_HIGHLIGHTING" />
     <setting file="file://$PROJECT_DIR$/Plugins/AdvancedSteamSessions/Source/AdvancedSteamSessions/AdvancedSteamSessions.Build.cs" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Source/Tabletop/Actors/CoverVolume.h" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Source/Tabletop/Actors/UnitBase.cpp" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Source/Tabletop/Actors/UnitBase.h" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Source/Tabletop/ArmyData.h" root0="FORCE_HIGHLIGHTING" />
     <setting file="file://$PROJECT_DIR$/Source/Tabletop/Controllers/SetupPlayerController.cpp" root0="FORCE_HIGHLIGHTING" />
     <setting file="file://$PROJECT_DIR$/Source/Tabletop/Controllers/SetupPlayerController.h" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Source/Tabletop/CoverPresetData.cpp" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Source/Tabletop/CoverPresetData.h" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Source/Tabletop/Gamemodes/MatchGameMode.cpp" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/Source/Tabletop/Gamemodes/MatchGameMode.h" root0="FORCE_HIGHLIGHTING" />
     <setting file="file://$PROJECT_DIR$/Source/Tabletop/Gamemodes/SetupGamemode.cpp" root0="FORCE_HIGHLIGHTING" />
     <setting file="file://$PROJECT_DIR$/Source/Tabletop/LobbyWidget.cpp" root0="FORCE_HIGHLIGHTING" />
     <setting file="file://$PROJECT_DIR$/Source/Tabletop/MenuWidget.cpp" root0="FORCE_HIGHLIGHTING" />
@@ -465,7 +473,10 @@
       <workItem from="1758282997077" duration="115000" />
       <workItem from="1758283178067" duration="8259000" />
       <workItem from="1758367396783" duration="3358000" />
-      <workItem from="1758374906987" duration="2260000" />
+      <workItem from="1758374906987" duration="2978000" />
+      <workItem from="1758396511461" duration="1387000" />
+      <workItem from="1758528506310" duration="24604000" />
+      <workItem from="1758557027246" duration="8458000" />
     </task>
     <servers />
   </component>

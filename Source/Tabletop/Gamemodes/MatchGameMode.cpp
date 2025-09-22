@@ -18,14 +18,17 @@
 #include "Tabletop/PlayerStates/TabletopPlayerState.h"
 
 // Data-driven combat system additions
+#include "Components/BoxComponent.h"
 #include "Tabletop/AbiltyEventSubsystem.h"
 #include "Tabletop/ArmyData.h"                  // Faction -> Units DT lookup
 #include "Tabletop/WeaponKeywords.h"
 #include "Tabletop/CombatEffects.h"
+#include "Tabletop/CoverPresetData.h"
 #include "Tabletop/KeywordProcessor.h"
 #include "Tabletop/UnitActionResourceComponent.h"
 #include "Tabletop/WeaponKeywordHelpers.h"
 #include "Tabletop/Actors/UnitAction.h"
+
 
 namespace
 {
@@ -49,6 +52,56 @@ namespace
         Need = FMath::Clamp(Need, 2, 7);
         return Need;
     }
+}
+
+static void GetTargetModelHitPoints(const AUnitBase* Target, TArray<FVector>& Out)
+{
+	Out.Reset();
+	for (UStaticMeshComponent* TC : Target->ModelMeshes)
+	{
+		if (!IsValid(TC)) continue;
+		if (TC->DoesSocketExist(Target->ImpactSocketName))
+			Out.Add(TC->GetSocketTransform(Target->ImpactSocketName, RTS_World).GetLocation());
+		else
+			Out.Add(TC->GetComponentTransform().TransformPosition(Target->ImpactOffsetLocal));
+	}
+	if (Out.Num() == 0) Out.Add(Target->GetActorLocation());
+}
+
+static void CollectCoverVolumes_AllLevels(UWorld* W, TArray<ACoverVolume*>& Out, bool bLog = false)
+{
+	Out.Reset();
+	if (!W) return;
+
+	// Persistent level
+	if (ULevel* PL = W->PersistentLevel)
+	{
+		for (AActor* A : PL->Actors)
+			if (auto* CV = Cast<ACoverVolume>(A)) Out.Add(CV);
+	}
+
+	// Streaming levels that are currently loaded (and ideally visible)
+	for (ULevel* L : W->GetLevels())
+	{
+		if (!L || L == W->PersistentLevel) continue;
+		const bool bLoaded  = (L->bIsVisible || L->IsPersistentLevel()); // UE5 visibility is enough for actors to be spawned
+		if (!bLoaded) continue;
+
+		for (AActor* A : L->Actors)
+			if (auto* CV = Cast<ACoverVolume>(A)) Out.Add(CV);
+	}
+
+	if (bLog)
+	{
+		UE_LOG(LogCoverNet, Display, TEXT("[GM] World=%s Levels=%d, Found %d ACoverVolume"),
+			*GetNameSafe(W), W->GetLevels().Num(), Out.Num());
+		int32 i=0;
+		for (ACoverVolume* CV : Out)
+		{
+			UE_LOG(LogCoverNet, Verbose, TEXT("  #%d: %s Class=%s Level=%s"),
+				++i, *GetNameSafe(CV), *GetNameSafe(CV->GetClass()), *GetNameSafe(CV->GetLevel()));
+		}
+	}
 }
 
 static void BuildImpactSites_Server(const AUnitBase* Attacker, const AUnitBase* Target, TArray<FImpactSite>& OutSites)
@@ -90,6 +143,103 @@ static void BuildImpactSites_Server(const AUnitBase* Attacker, const AUnitBase* 
         S.Rot = (From - ImpactLoc).Rotation(); // incoming (target -> shooter)
         OutSites.Add(S);
     }
+}
+
+static bool IsCoverNearActor(const ACoverVolume* CV, const AActor* A, float MaxCm)
+{
+	if (!CV || !CV->Box || !A) return false;
+
+	const FVector AttLoc = A->GetActorLocation();
+	FVector OnSurface;
+	const float d = CV->Box->GetClosestPointOnCollision(AttLoc, OnSurface, NAME_None);
+
+	// GetClosestPointOnCollision returns distance in cm (or -1 if invalid); treat <= MaxCm as "near"
+	return (d >= 0.f) && (d <= MaxCm + KINDA_SMALL_NUMBER);
+}
+
+static ADeploymentZone* NearestZoneFor(const FVector& P, const TArray<ADeploymentZone*>& Zones)
+{
+    ADeploymentZone* Best = nullptr;
+    float BestD2 = TNumericLimits<float>::Max();
+    for (ADeploymentZone* Z : Zones)
+    {
+        if (!Z || !Z->bEnabled) continue;
+        const float D2 = FVector::DistSquared(P, Z->GetActorLocation());
+        if (D2 < BestD2) { BestD2 = D2; Best = Z; }
+    }
+    return Best;
+}
+
+static void GatherZonesByTeam(UWorld* W, TArray<ADeploymentZone*>& OutTeam1, TArray<ADeploymentZone*>& OutTeam2)
+{
+    OutTeam1.Reset(); OutTeam2.Reset();
+    for (TActorIterator<ADeploymentZone> It(W); It; ++It)
+    {
+        ADeploymentZone* Z = *It;
+        if (!Z || !Z->bEnabled) continue;
+        if (Z->CurrentOwner == EDeployOwner::Team1) OutTeam1.Add(Z);
+        else if (Z->CurrentOwner == EDeployOwner::Team2) OutTeam2.Add(Z);
+        // We ignore “Either” for assignment to keep the mapping unambiguous.
+    }
+}
+
+static FName PickRowNameForFaction(const UDataTable* DT, EFaction Faction, bool bPreferLow)
+{
+	if (!DT || Faction == EFaction::None) return NAME_None;
+
+	TArray<FName> Both, LowOnly;
+	for (const auto& Pair : DT->GetRowMap())
+	{
+		const FCoverPresetRow* R = reinterpret_cast<const FCoverPresetRow*>(Pair.Value);
+		if (!R || R->Faction != Faction) continue;
+
+		const bool bH = (R->HighCoverMesh != nullptr);
+		const bool bL = (R->LowCoverMesh  != nullptr);
+		if ( bL &&  bH) Both.Add(Pair.Key);
+		if ( bL && !bH) LowOnly.Add(Pair.Key);
+	}
+
+	if (bPreferLow)
+	{
+		if (LowOnly.Num()) return LowOnly[FMath::RandRange(0, LowOnly.Num()-1)];
+		if (Both.Num())    return Both   [FMath::RandRange(0, Both   .Num()-1)];
+	}
+	else
+	{
+		if (Both.Num())    return Both   [FMath::RandRange(0, Both   .Num()-1)];
+		if (LowOnly.Num()) return LowOnly[FMath::RandRange(0, LowOnly.Num()-1)];
+	}
+	return NAME_None;
+}
+
+static const FCoverPresetRow* PickRowForFaction(
+	const UDataTable* DT, EFaction Faction, bool bPreferLow)
+{
+	if (!DT || Faction == EFaction::None) return nullptr;
+
+	TArray<const FCoverPresetRow*> Both, LowOnly;
+	for (const auto& Pair : DT->GetRowMap())
+	{
+		const FCoverPresetRow* R = reinterpret_cast<const FCoverPresetRow*>(Pair.Value);
+		if (!R || R->Faction != Faction) continue;
+
+		const bool bH = (R->HighCoverMesh != nullptr);
+		const bool bL = (R->LowCoverMesh  != nullptr);
+		if ( bL &&  bH) Both.Add(R);
+		if ( bL && !bH) LowOnly.Add(R);
+	}
+
+	if (bPreferLow)
+	{
+		if (LowOnly.Num()) return LowOnly[FMath::RandRange(0, LowOnly.Num()-1)];
+		if (Both.Num())    return Both   [FMath::RandRange(0, Both   .Num()-1)];
+	}
+	else
+	{
+		if (Both.Num())    return Both   [FMath::RandRange(0, Both   .Num()-1)];
+		if (LowOnly.Num()) return LowOnly[FMath::RandRange(0, LowOnly.Num()-1)];
+	}
+	return nullptr;
 }
 
 UAbilityEventSubsystem* AMatchGameMode::AbilityBus(UWorld* W)
@@ -159,6 +309,8 @@ void AMatchGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutL
     DOREPLIFETIME(AMatchGameState, bShowSummary);
     DOREPLIFETIME(AMatchGameState, SelectedUnitGlobal);
     DOREPLIFETIME(AMatchGameState, TargetUnitGlobal);
+	DOREPLIFETIME(AMatchGameState, CoverPresetsTable);
+	DOREPLIFETIME(AMatchGameState, CoverAssignments);
 }
 
 void AMatchGameState::Multicast_ScreenMsg_Implementation(const FString& Text, FColor Color, float Time, int32 Key)
@@ -300,6 +452,50 @@ void AMatchGameState::BeginPlay()
     Objectives.Reserve(Found.Num());
     for (AActor* A : Found)
         if (auto* M = Cast<AObjectiveMarker>(A)) Objectives.Add(M);
+
+	FWorldDelegates::LevelAddedToWorld.AddUObject(this, &AMatchGameState::OnLevelAdded);
+}
+
+void AMatchGameState::OnLevelAdded(ULevel* Level, UWorld* World)
+{
+	if (World == GetWorld())
+	{
+		ReapplyAllCoverAssignments();
+	}
+}
+
+void AMatchGameState::OnRep_CoverAssignments()
+{
+	ReapplyAllCoverAssignments();
+}
+
+void AMatchGameState::ReapplyAllCoverAssignments()
+{
+	for (const FCoverRowAssignment& A : CoverAssignments)
+	{
+		ApplyCoverAssignment(A);
+	}
+}
+
+void AMatchGameState::ApplyCoverAssignment(const FCoverRowAssignment& A)
+{
+	if (!CoverPresetsTable) return;
+	ACoverVolume* CV = A.Volume.Get();
+	if (!IsValid(CV)) return;
+
+	const FCoverPresetRow* Row = CoverPresetsTable->FindRow<FCoverPresetRow>(A.RowName, TEXT("ApplyCoverAssignment"));
+	if (!Row) return;
+
+	UStaticMesh* High = Row->HighCoverMesh;
+	UStaticMesh* Low  = Row->LowCoverMesh;
+	UStaticMesh* None = Row->NoCoverMesh;
+
+	// Enforce “prefer low” policy exactly as on the server
+	if (A.bPreferLow && High && Low) High = nullptr;
+
+	CV->HighToLowPct = FMath::Clamp(A.ThresholdPct, 0.f, 1.f);
+	CV->ApplyPresetMeshes(High, Low, None);
+	CV->SetHealthPercentImmediate(FMath::Clamp(A.StartPct, 0.f, 1.f));
 }
 
 void AMatchGameState::Multicast_DrawShotDebug_Implementation(const FVector& WorldLoc, const FString& Msg, FColor Color, float Duration)
@@ -481,6 +677,436 @@ void AMatchGameMode::HandleSeamlessTravelPlayer(AController*& C)
     FinalizePlayerJoin(Cast<APlayerController>(C)); 
 }
 
+void AMatchGameMode::RebroadcastCoverPresetsReliable()
+{
+	if (!HasAuthority()) return;
+	UWorld* W = GetWorld(); AMatchGameState* S = GS(); if (!W || !S) return;
+
+	for (TActorIterator<ACoverVolume> It(W); It; ++It)
+	{
+		ACoverVolume* CV = *It;
+		if (!CV) continue;
+
+		// Skip rebroadcasting "empty" state; it causes clients to apply nulls
+		if (CV->HighMesh == nullptr && CV->LowMesh == nullptr && CV->NoneMesh == nullptr)
+		{
+			UE_LOG(LogCoverNet, Verbose, TEXT("[GM::Rebroadcast] Skipping %s (no meshes assigned yet)"),
+				   *GetNameSafe(CV));
+			continue;
+		}
+
+		const float StartPct = (CV->MaxHealth > 0.f) ? (CV->Health / CV->MaxHealth) : 0.f;
+
+		S->Multicast_ApplyCoverPreset(CV,
+		  CV->HighMesh, CV->LowMesh, CV->NoneMesh,
+		  StartPct, CV->HighToLowPct);
+	}
+}
+
+void AMatchGameMode::OnClientReportedLoaded(APlayerController* PC)
+{
+	if (!HasAuthority() || !PC) return;
+	ClientsLoaded.Add(PC);
+
+	const int32 ExpectedPlayers = 2; // adjust if you support more
+	if (ClientsLoaded.Num() >= ExpectedPlayers)
+	{
+		// 1) Ensure presets chosen (if not already)
+		ApplyCoverPresetsFromTableOnce();
+
+		// 2) Rebroadcast the chosen meshes/threshold/health to everyone
+		RebroadcastCoverPresetsReliable();
+
+		// 3) Belt-and-suspenders: do it again a fraction later
+		FTimerHandle Th;
+		GetWorldTimerManager().SetTimer(Th, this,
+			&AMatchGameMode::RebroadcastCoverPresetsReliable, 0.35f, false);
+	}
+}
+
+void AMatchGameMode::PostSeamlessTravel()
+{
+	Super::PostSeamlessTravel();
+	// Server world is ready; clients may still be streaming.
+	// Safe to queue a rebroadcast on next tick.
+	FTimerHandle Th;
+	GetWorldTimerManager().SetTimerForNextTick(this, &AMatchGameMode::RebroadcastCoverPresetsReliable);
+}
+
+void AMatchGameMode::CoverPreset_Dump()
+{
+	if (!HasAuthority()) { UE_LOG(LogCoverNet, Warning, TEXT("[GM] Dump is server-only.")); return; }
+	TArray<ACoverVolume*> Covers; CollectCoverVolumes_AllLevels(GetWorld(), Covers, /*bLog*/true);
+	UE_LOG(LogCoverNet, Display, TEXT("[GM] Dump found %d ACoverVolume"), Covers.Num());
+}
+
+TArray<FVector> AMatchGameMode::ComputeCohesiveCoveredFormation(
+	const FVector& UnitCenter, const FVector& ThreatDir,
+	int32 ModelCount, float BaseRadiusCm) const
+{
+	TArray<FVector> Out; Out.Reserve(ModelCount);
+	if (!GetWorld() || ModelCount <= 0) return Out;
+
+	const float cmPer = CmPerTabletopInch();
+	const float MaxRadius = 6.f * cmPer;   // within 6"
+	const float LinkMax   = 2.f * cmPer;   // <= 2" to at least one neighbor
+	const float MinSep    = BaseRadiusCm * 1.9f; // keep small gap between bases
+
+	// Generate candidate ring points (hex spiral) within MaxRadius
+	TArray<FVector> Candidates;
+	{
+		const float d = FMath::Clamp(BaseRadiusCm * 2.1f, 15.f, 120.f);
+		auto AxialToXY = [d](int q, int r)->FVector2D {
+			const float x = d * (q + r*0.5f);
+			const float y = d * (FMath::Sqrt(3.f)*0.5f) * r;
+			return {x,y};
+		};
+		struct FC{int x,y,z;};
+		auto Dir = [](int i)->FC{ static const FC D[6]={{1,-1,0},{1,0,-1},{0,1,-1},{-1,1,0},{-1,0,1},{0,-1,1}}; return D[i%6];};
+		auto Add = [](FC a,FC b){return FC{a.x+b.x,a.y+b.y,a.z+b.z};};
+
+		TArray<FVector2D> pts; pts.Add({0,0});
+		for (int ring=1; pts.Num() < ModelCount*8; ++ring)
+		{
+			FC cur{ring,-ring,0};
+			for(int side=0;side<6;++side)
+			{
+				const FC step=Dir(side);
+				for(int s=0;s<ring;++s)
+				{
+					pts.Add(AxialToXY(cur.x,cur.z)); cur=Add(cur,step);
+					if (pts.Num()>=ModelCount*8) break;
+				}
+				if (pts.Num()>=ModelCount*8) break;
+			}
+		}
+		// Keep only those within MaxRadius
+		for (auto& p: pts) if (p.Size() <= MaxRadius) Candidates.Add(UnitCenter + FVector(p.X, p.Y, 0));
+	}
+
+	TArray<ACoverVolume*> AllCovers;
+	for (TActorIterator<ACoverVolume> It(GetWorld()); It; ++It) if (*It) AllCovers.Add(*It);
+	
+	// Returns distance from P to nearest cover surface; OutNormal points *away from cover*.
+	// If the point is inside (distance ~ 0), we synthesize a reasonable outward direction.
+	auto NearestCoverClearance = [&](const FVector& P, FVector& OutNormal)->float
+	{
+		float best = TNumericLimits<float>::Max();
+		OutNormal = FVector::ZeroVector;
+
+		for (ACoverVolume* CV : AllCovers)
+		{
+			if (!CV || !CV->Box) continue;
+
+			FVector OnSurface;
+			const float d = CV->Box->GetClosestPointOnCollision(P, OnSurface, NAME_None);
+			if (d < 0.f) continue; // no valid body instance
+
+			if (d < best)
+			{
+				best = d;
+
+				// Prefer pushing away from the surface point we got back
+				FVector dir = (P - OnSurface);
+				if (!dir.IsNearlyZero())
+				{
+					OutNormal = dir.GetSafeNormal2D();
+				}
+				else
+				{
+					// Fallback (e.g., exactly on the surface or degenerate): push away from actor center
+					OutNormal = (P - CV->GetActorLocation()).GetSafeNormal2D();
+				}
+			}
+		}
+		return best; // FLT_MAX means "no cover found"
+	};
+
+	// Treat "base radius" as the minimum desired clearance from cover collision
+	const float DesiredClearance = FMath::Clamp(BaseRadiusCm * 0.95f, 10.f, 120.f);
+
+	// Quick cover test near a point (like above)
+	auto CoveredAt = [&](const FVector& P)->ECoverType
+	{
+		const FVector From = P + (-ThreatDir).GetSafeNormal() * (MaxRadius*1.2f) + FVector(0,0,60);
+		FHitResult Hit;
+		FCollisionQueryParams Params(SCENE_QUERY_STAT(FormCover), false);
+		// ignore units in formation solve
+		for (TActorIterator<AUnitBase> It(GetWorld()); It; ++It) Params.AddIgnoredActor(*It);
+		if (!GetWorld()->LineTraceSingleByChannel(Hit, From, P, CoverTraceChannel, Params)) return ECoverType::None;
+		if (ACoverVolume* CV = Cast<ACoverVolume>(Hit.GetActor()))
+		{
+			const float d = FVector::Dist(Hit.ImpactPoint, P);
+			return (d <= 6.f * CmPerTabletopInch()) ? CV->GetCurrentCoverType() : ECoverType::None;
+		}
+		return ECoverType::None;
+	};
+
+	// Score function
+	auto Score = [&](const FVector& P, const TArray<FVector>& Placed)->float
+	{
+		float s = 0.f;
+		const ECoverType C = CoveredAt(P);
+		if (C == ECoverType::High) s += 10.f;
+		else if (C == ECoverType::Low) s += 6.f;
+
+		FVector n;
+		const float clear = NearestCoverClearance(P, n);
+		if (clear < DesiredClearance)
+		{
+			// Strong negative so we never pick these unless there is literally no option
+			s -= 100000.f - clear; 
+		}
+
+		// small preference to be slightly behind cover (dot with -ThreatDir)
+		const FVector Off = (P - UnitCenter); 
+		s += FVector::DotProduct(Off.GetSafeNormal2D(), (-ThreatDir).GetSafeNormal2D()) * 2.f;
+
+		// cohesion: prefer near center
+		s += FMath::Max(0.f, 5.f - (Off.Size2D() / BaseRadiusCm));
+
+		// prefer near some already placed model (to satisfy <=2")
+		if (Placed.Num() > 0)
+		{
+			float best = 1e9f;
+			for (const FVector& Q : Placed) best = FMath::Min(best, FVector::Dist2D(P, Q));
+			// reward if within link range, light penalty if isolated
+			s += (best <= LinkMax) ? 2.f : -2.5f;
+		}
+
+		// penalty for being too close (< MinSep)
+		for (const FVector& Q : Placed)
+		{
+			const float d = FVector::Dist2D(P, Q);
+			if (d < MinSep) s -= (MinSep - d) * 0.2f;
+		}
+		return s;
+	};
+
+	// Greedy place N models
+	for (int i=0;i<ModelCount && Candidates.Num()>0; ++i)
+	{
+		int32 bestIdx = 0;
+		float bestScore = -FLT_MAX;
+		for (int32 c=0;c<Candidates.Num();++c)
+		{
+			const float s = Score(Candidates[c], Out);
+			if (s > bestScore) { bestScore = s; bestIdx = c; }
+		}
+		Out.Add(Candidates[bestIdx]);
+		Candidates.RemoveAtSwap(bestIdx);
+	}
+
+	// Relaxation: nudge points to satisfy link + separation while staying within MaxRadius
+	for (int iter=0; iter<8; ++iter)
+	{
+		for (int a=0;a<Out.Num();++a)
+		{
+			FVector P = Out[a];
+			// pull towards center if exceeding MaxRadius
+			const FVector v = P - UnitCenter;
+			const float r = v.Size2D();
+			if (r > MaxRadius) P -= v.GetSafeNormal2D() * (r - MaxRadius);
+
+			// push apart if too close, pull a little if no neighbor within LinkMax
+			float nearest = 1e9f;
+			int   nearIdx = -1;
+			for (int b=0;b<Out.Num();++b) if (b!=a)
+			{
+				const float d = FVector::Dist2D(P, Out[b]);
+				if (d < nearest) { nearest=d; nearIdx=b; }
+				if (d < MinSep)  P -= (Out[b]-P).GetSafeNormal2D() * (MinSep - d) * 0.5f;
+			}
+			if (nearIdx>=0 && nearest>LinkMax)
+			{
+				// softly pull towards nearest to satisfy <=2"
+				P += (Out[nearIdx]-P).GetSafeNormal2D() * FMath::Min(15.f, (nearest - LinkMax)*0.33f);
+			}
+
+			FVector n;
+			float clear = NearestCoverClearance(UnitCenter + P, n);
+			if (clear < DesiredClearance && n.SizeSquared() > 0.001f)
+			{
+				const float push = (DesiredClearance - clear) + 2.f; // tiny extra to clear
+				P += n.GetSafeNormal2D() * push;
+			}
+
+
+			Out[a] = P;
+		}
+	}
+
+	// Return **offsets** local to UnitCenter (so Unit can place its model components)
+	for (FVector& P : Out) P -= UnitCenter;
+	return Out;
+}
+
+bool AMatchGameMode::QueryCoverWithActor(
+    AUnitBase* Attacker, AUnitBase* Target,
+    int32& OutHitMod, int32& OutSaveMod, ECoverType& OutType,
+    ACoverVolume*& OutPrimaryCover, TMap<ACoverVolume*, int32>* OutCoverHits) const
+{
+    OutHitMod=0; OutSaveMod=0; OutType=ECoverType::None; OutPrimaryCover=nullptr;
+
+    UWorld* W = GetWorld(); if (!W || !Attacker || !Target) return false;
+    AMatchGameState* S = GS(); const bool bDraw = (S && bDebugCoverTraces);
+
+    // Collect attacker/target points
+    TArray<FVector> APoints;
+    for (int i=0;i<Attacker->ModelMeshes.Num();++i) APoints.Add(Attacker->GetMuzzleTransform(i).GetLocation());
+    if (APoints.Num()==0) APoints.Add(Attacker->GetActorLocation());
+
+    TArray<FVector> TPoints;
+	GetTargetModelHitPoints(Target,TPoints);
+    if (TPoints.Num()==0) TPoints.Add(Target->GetActorLocation());
+
+    // Ignore all units; allow hitting cover or world
+    FCollisionQueryParams Params(SCENE_QUERY_STAT(CoverTraceFull), false);
+    for (TActorIterator<AUnitBase> It(W); It; ++It) Params.AddIgnoredActor(*It);
+
+    auto DrawRay = [&](const FVector& A, const FVector& B, const FColor& C, float Thk=2.f){
+        if (bDraw) S->Multicast_DrawLine(A,B,C,4.f,Thk);
+    };
+    auto Note = [&](const FVector& P, const FString& Msg, const FColor& C){
+        if (bDraw){ S->Multicast_DrawSphere(P,10.f,10,C,4.f,1.5f); S->Multicast_DrawWorldText(P+FVector(0,0,16),Msg,C,4.f,0.9f); }
+    };
+
+    // Optional nearest-N selection (fast) or exhaustive cross-matrix
+    auto NearestIdxs = [&](const FVector& P, int32 N)->TArray<int32>{
+        TArray<int32> Idx; for (int32 i=0;i<APoints.Num();++i) Idx.Add(i);
+        Idx.Sort([&](int32 L,int32 R){ return FVector::DistSquared(APoints[L],P) < FVector::DistSquared(APoints[R],P); });
+        Idx.SetNum(FMath::Clamp(N,1,Idx.Num()));
+        return Idx;
+    };
+
+    const int32 RaysN = bExhaustiveCoverCross ? APoints.Num() : FMath::Clamp(RaysPerTargetModel,1,4);
+
+    int32 CoveredModels = 0; bool AnyHigh=false;
+    TMap<ACoverVolume*, int32> HitsPerCoverLocal;
+
+    int32 ModelIdx = 0;
+    for (const FVector& TP : TPoints)
+    {
+        ++ModelIdx;
+        TArray<int32> Idx = bExhaustiveCoverCross ? TArray<int32>() : NearestIdxs(TP, RaysN);
+        if (bExhaustiveCoverCross){ Idx.Reserve(APoints.Num()); for (int32 i=0;i<APoints.Num();++i) Idx.Add(i); }
+
+        bool bModelCovered=false; ECoverType ModelCT=ECoverType::None;
+
+        for (int32 i : Idx)
+        {
+            const FVector From = APoints[i];
+            FHitResult HR;
+            const bool bHit = W->LineTraceSingleByChannel(HR, From, TP, CoverTraceChannel, Params);
+
+            if (!bHit)
+            {
+                DrawRay(From, TP, FColor::Red, 1.5f);
+                continue;
+            }
+
+        	if (ACoverVolume* CV = Cast<ACoverVolume>(HR.GetActor()))
+        	{
+        		if (CV->BlocksCoverTrace())
+        		{
+        			bModelCovered = true;
+        			ModelCT = CV->GetCurrentCoverType();
+        			HitsPerCoverLocal.FindOrAdd(CV) += 1;
+
+        			DrawRay(From, TP, ModelCT==ECoverType::High?FColor::Emerald:FColor::Cyan, 3.f);
+        			Note(HR.ImpactPoint,
+						FString::Printf(TEXT("Model %d: %s cover"),
+							ModelIdx, ModelCT==ECoverType::High?TEXT("HIGH"):TEXT("LOW")),
+						ModelCT==ECoverType::High?FColor::Emerald:FColor::Cyan);
+        		}
+        		else
+        		{
+        			DrawRay(From, TP, FColor::Orange, 2.f);
+        			Note(HR.ImpactPoint, TEXT("cover actor but no longer blocks"), FColor::Orange);
+        		}
+        	}
+        }
+
+        if (bModelCovered)
+        {
+            ++CoveredModels;
+            if (ModelCT == ECoverType::High) AnyHigh=true;
+        }
+        else
+        {
+            Note(TP, FString::Printf(TEXT("Model %d: no cover"), ModelIdx), FColor::Red);
+        }
+    }
+
+    const int32 Total = FMath::Max(1, TPoints.Num());
+    const float Frac  = float(CoveredModels) / float(Total);
+
+    // Hysteresis as before
+    const float Now=W->TimeSeconds;
+    FCoverPairKey Key{Attacker, Target};
+    FCoverPairCache Old{}; if (const FCoverPairCache* F = CoverMemory.Find(Key)) Old=*F;
+    const float OnT = CoverModelCoverageThreshold;
+    const float OffT= FMath::Max(0.f, OnT - CoverHysteresis);
+    const bool bGrant = (Old.LastType==ECoverType::None) ? (Frac>=OnT) : (Frac>=OffT);
+
+    ECoverType SquadCT = bGrant ? (AnyHigh?ECoverType::High:ECoverType::Low) : ECoverType::None;
+
+    // Choose primary cover = most-hit cover (if any)
+    ACoverVolume* Primary = nullptr; int32 BestHits=-1;
+    for (auto& KV : HitsPerCoverLocal)
+        if (KV.Value > BestHits) { BestHits=KV.Value; Primary=KV.Key; }
+
+    OutType = SquadCT;
+    OutHitMod  = (SquadCT==ECoverType::High)? -1 : 0;
+    OutSaveMod = (SquadCT!=ECoverType::None)?  1 : 0;
+    OutPrimaryCover = Primary;
+    if (OutCoverHits) *OutCoverHits = HitsPerCoverLocal;
+
+    if (bDraw)
+    {
+        const FVector Mid=(Attacker->GetActorLocation()+Target->GetActorLocation())*0.5f+FVector(0,0,140.f);
+        FString pick = Primary? Primary->GetName() : TEXT("none");
+        S->Multicast_DrawShotDebug(Mid,
+            FString::Printf(TEXT("[Cover] %d/%d models  frac=%.2f  => %s  primary=%s"),
+                CoveredModels, Total, Frac,
+                SquadCT==ECoverType::High?TEXT("HIGH"):SquadCT==ECoverType::Low?TEXT("LOW"):TEXT("NONE"),
+                *pick),
+            SquadCT==ECoverType::None?FColor::Red:FColor::Green, 5.f);
+    }
+
+    // Save memory for hysteresis
+    FCoverPairCache NewMem; NewMem.LastFraction=Frac; NewMem.LastType=SquadCT;
+    const_cast<AMatchGameMode*>(this)->CoverMemory.Add(Key, NewMem);
+
+    return SquadCT != ECoverType::None;
+}
+
+bool AMatchGameMode::QueryCover(AUnitBase* A, AUnitBase* T,
+                                int32& OutHitMod, int32& OutSaveMod, ECoverType& OutType) const
+{
+    ACoverVolume* Dummy=nullptr;
+    return QueryCoverWithActor(A, T, OutHitMod, OutSaveMod, OutType, Dummy, nullptr);
+}
+
+void AMatchGameMode::ApplyDelayedCoverDamage(ACoverVolume* Cover, float Damage, FVector DebugLoc, FString DebugMsg)
+{
+	if (!HasAuthority()) return;
+
+	if (IsValid(Cover) && Damage > 0.f)
+	{
+		Cover->ApplyCoverDamage(Damage); // your ACoverVolume method
+	}
+
+	if (AMatchGameState* S = GS())
+	{
+		// Optional: small orange note so you can see it landed with the impacts
+		S->Multicast_DrawShotDebug(DebugLoc, DebugMsg, FColor::Orange, 4.f);
+		S->OnDeploymentChanged.Broadcast();
+		S->ForceNetUpdate();
+	}
+}
+
+
 void AMatchGameMode::ResetTurnFor(APlayerState* PS)
 {
     for (TActorIterator<AUnitBase> It(GetWorld()); It; ++It)
@@ -634,6 +1260,19 @@ void AMatchGameMode::Handle_MoveUnit(AMatchPlayerController* PC, AUnitBase* Unit
     Unit->MoveBudgetInches = FMath::Max(0.f, Unit->MoveBudgetInches - spentTTIn);
     Unit->bMovedThisTurn = true;      // NEW: track moved for Heavy/Assault logic
     Unit->SetActorLocation(finalDest);
+
+	const FVector Center = Unit->GetActorLocation();
+	const FVector ThreatDir = (Unit->CurrentTarget->GetActorLocation() - Center).GetSafeNormal2D(); // or the most threatening direction
+
+	const float BaseRadiusCm = Unit->ModelSpacingApartCm * 0.5f; // rough base radius
+	TArray<FVector> Offs = ComputeCohesiveCoveredFormation(Center, ThreatDir, Unit->ModelsCurrent, BaseRadiusCm);
+
+	// Optional: immediately refresh target previews
+	if (S)
+	{
+		S->OnDeploymentChanged.Broadcast();
+		S->ForceNetUpdate();
+	}
 
     if (UAbilityEventSubsystem* Bus = AbilityBus(GetWorld()))
     {
@@ -805,8 +1444,10 @@ FShotResolveResult AMatchGameMode::ResolveRangedAttack_Internal(
 	// Cover baseline (keywords/mods can override some effects like Ignores Cover)
 	int32 HitMod = 0, SaveMod = 0;
 	ECoverType Cover = ECoverType::None;
-	QueryCover(Attacker, Target, HitMod, SaveMod, Cover);
-
+	ACoverVolume* PrimaryCover = nullptr;
+	TMap<ACoverVolume*, int32> CoverHits;
+	QueryCoverWithActor(Attacker, Target, HitMod, SaveMod, Cover, PrimaryCover, &CoverHits);
+	
 	// ===== Stage: PreHitCalc =====
 	{
 		FStageResult K = FKeywordProcessor::BuildForStage(Ctx, ECombatEvent::PreHitCalc);
@@ -868,6 +1509,59 @@ FShotResolveResult AMatchGameMode::ResolveRangedAttack_Internal(
 				}
 				Ctx.Wounds += AutoWounds;
 			}
+		}
+	}
+
+	const float CmPerTT = CmPerTabletopInch();
+	const float FriendlyIgnoreCm = FriendlyCoverIgnoreProximityInches * CmPerTT;
+
+	// Remove attacker-near covers from damage candidates
+	for (auto It = CoverHits.CreateIterator(); It; ++It)
+	{
+		ACoverVolume* CV = It.Key();
+		if (!CV) { It.RemoveCurrent(); continue; }
+
+		if (IsCoverNearActor(CV, Attacker, FriendlyIgnoreCm))
+		{
+			// Don’t let the shooter destroy their own nearby cover
+			It.RemoveCurrent();
+		}
+	}
+	
+	int32 BestHits = -1;
+	for (auto& KV : CoverHits)
+	{
+		if (KV.Value > BestHits)
+		{
+			BestHits   = KV.Value;
+			PrimaryCover = KV.Key;
+		}
+	}
+
+	if (PrimaryCover /* && PrimaryCover->BlocksCoverTrace() */)
+	{
+		const int32 Misses = FMath::Max(0, Ctx.Attacks - Ctx.Hits);
+
+		// Choose the damage model you want; this uses the (already modified) shot damage.
+		const float CoverDamage = float(Misses * FMath::Max(1, Ctx.Damage));
+
+		if (CoverDamage > 0.f)
+		{
+			const FVector L0  = Attacker->GetActorLocation();
+			const FVector L1  = Target->GetActorLocation();
+			const FVector Mid = (L0 + L1) * 0.5f + FVector(0,0,150.f);
+
+			const FString CoverMsg = FString::Printf(TEXT("[Cover] %d misses -> %.0f damage to cover"), Misses, CoverDamage);
+
+			const float ImpactDelay = Attacker->ImpactDelaySeconds; // same as unit impact
+
+			FTimerDelegate DelCover;
+			DelCover.BindUFunction(this, FName("ApplyDelayedCoverDamage"),
+								   PrimaryCover, CoverDamage, Mid, CoverMsg);
+
+			FTimerHandle TmpCover;
+			GetWorld()->GetTimerManager().SetTimer(TmpCover, DelCover,
+												   FMath::Max(0.f, ImpactDelay), false);
 		}
 	}
 
@@ -1064,6 +1758,8 @@ FShotResolveResult AMatchGameMode::ResolveRangedAttack_Internal(
 		S2->ForceNetUpdate();
 	}
 
+	CoverMemory.Empty(); // clear cover memory to prevent memory growth
+
 	return Out;
 }
 
@@ -1147,7 +1843,7 @@ int32 AMatchGameMode::CountVisibleTargetModels(const AUnitBase* Attacker, const 
 
         // Keep your existing LOS channel; just don’t let units block
         const bool bHit = World->LineTraceSingleByChannel(
-            Hit, From, To, ECollisionChannel::ECC_GameTraceChannel3 /*LOS*/, Params);
+            Hit, From, To, ECollisionChannel::ECC_GameTraceChannel5 /*LOS*/, Params);
 
         if (!bHit)
         {
@@ -1179,132 +1875,6 @@ static void DrawCoverNote(UWorld* World, const FVector& At, const FString& Msg,
     }
 }
 
-bool AMatchGameMode::ComputeCoverBetween(const FVector& From, const FVector& To, ECoverType& OutType) const
-{
-    OutType = ECoverType::None;
-
-    UWorld* World = GetWorld();
-    if (!World) return false;
-
-    FHitResult Hit;
-    FCollisionQueryParams Params(SCENE_QUERY_STAT(CoverTrace), /*bTraceComplex*/ false);
-    Params.bReturnPhysicalMaterial = false;
-
-    const bool bHit = World->LineTraceSingleByChannel(Hit, From, To, CoverTraceChannel, Params);
-
-    if (bDebugCoverTraces)
-        DrawCoverTrace(World, From, To, bHit ? FColor::Yellow : FColor::Red, 1.5f, 2.f);
-
-    if (!bHit) return false;
-
-    if (ACoverVolume* CV = Cast<ACoverVolume>(Hit.GetActor()))
-    {
-        OutType = CV->CoverType;
-        return true;
-    }
-    return false;
-}
-
-bool AMatchGameMode::QueryCover(AUnitBase* A, AUnitBase* T,
-                                int32& OutHitMod, int32& OutSaveMod, ECoverType& OutType) const
-{
-    OutHitMod  = 0;
-    OutSaveMod = 0;
-    OutType    = ECoverType::None;
-    if (!A || !T) return false;
-
-    UWorld* World = GetWorld();
-    if (!World) return false;
-
-    const float ProxCm = CoverProximityInches * CmPerTabletopInch();
-
-    FCollisionQueryParams Params(SCENE_QUERY_STAT(CoverTraceFull), false);
-    Params.AddIgnoredActor(A);
-    Params.AddIgnoredActor(T);
-
-    auto TraceOne = [&](const FVector& From, const FVector& TargetPoint)->ECoverType
-    {
-        FHitResult Hit;
-        const bool bHit = World->LineTraceSingleByChannel(Hit, From, TargetPoint, CoverTraceChannel, Params);
-
-        if (!bHit)
-        {
-            if (bDebugCoverTraces) DrawCoverTrace(World, From, TargetPoint, FColor::Red, 0.75f, 1.5f);
-            return ECoverType::None;
-        }
-
-        ACoverVolume* CV = Cast<ACoverVolume>(Hit.GetActor());
-        if (!CV)
-        {
-            if (bDebugCoverTraces) DrawCoverTrace(World, From, TargetPoint, FColor::Purple, 0.75f, 1.5f);
-            return ECoverType::None;
-        }
-
-        const float dCm = FVector::Dist(Hit.ImpactPoint, TargetPoint);
-        const bool bProx = (dCm <= ProxCm);
-
-        if (bDebugCoverTraces)
-        {
-            const FColor C = bProx ? FColor::Green : FColor::Orange;
-            DrawCoverTrace(World, From, TargetPoint, C, 1.75f, 2.0f);
-            const FVector Mid = (From + TargetPoint) * 0.5f + FVector(0,0,25.f);
-            DrawCoverNote(World, Mid,
-                FString::Printf(TEXT("%s cover (%s)\n%.1f cm from target"),
-                    CV->CoverType==ECoverType::High?TEXT("High"):TEXT("Low"),
-                    bProx?TEXT("valid"):TEXT("too far"),
-                    dCm),
-                C, 1.5f);
-        }
-
-        return bProx ? CV->CoverType : ECoverType::None;
-    };
-
-    // 1) Quick center-to-center (fast path)
-    {
-        const FVector From = A->GetActorLocation();
-        const FVector To   = T->GetActorLocation();
-        if (ECoverType C = TraceOne(From, To); C != ECoverType::None)
-        {
-            OutType    = C;
-            OutSaveMod = 1;
-            if (C == ECoverType::High) OutHitMod = -1;
-            return true;
-        }
-    }
-
-    // 2) Per-model sampling (early out on first High; otherwise accept Low if found)
-    TArray<FVector> FromPts, ToPts;
-    A->GetModelWorldLocations(FromPts);
-    T->GetModelWorldLocations(ToPts);
-
-    const int32 MaxFrom = FMath::Min(MaxCoverSamplesPerUnit, FromPts.Num());
-    const int32 MaxTo   = FMath::Min(MaxCoverSamplesPerUnit, ToPts.Num());
-
-    bool bAnyLow  = false;
-    bool bAnyHigh = false;
-
-    for (int32 i=0; i<MaxFrom; ++i)
-    {
-        for (int32 j=0; j<MaxTo; ++j)
-        {
-            const ECoverType C = TraceOne(FromPts[i], ToPts[j]);
-            if (C == ECoverType::High) { bAnyHigh = true; goto DONE; }
-            if (C == ECoverType::Low)  { bAnyLow  = true; }
-        }
-    }
-
-DONE:
-    if (bAnyHigh || bAnyLow)
-    {
-        OutType    = bAnyHigh ? ECoverType::High : ECoverType::Low;
-        OutSaveMod = 1;
-        if (bAnyHigh) OutHitMod = -1;
-        return true;
-    }
-
-    return false;
-}
-
 void AMatchGameMode::Handle_CancelPreview(AMatchPlayerController* PC, AUnitBase* Attacker)
 {
     if (!HasAuthority() || !PC || !Attacker) return;
@@ -1331,6 +1901,31 @@ void AMatchGameMode::Handle_CancelPreview(AMatchPlayerController* PC, AUnitBase*
     }
 }
 
+void AMatchGameState::Multicast_ApplyCoverPreset_Implementation(
+	ACoverVolume* Volume, UStaticMesh* HighMesh, UStaticMesh* LowMesh,
+	UStaticMesh* NoneMesh, float StartHealthPct, float ThresholdPct)
+{
+	if (!IsValid(Volume)) return;
+
+	Volume->HighToLowPct = FMath::Clamp(ThresholdPct, 0.f, 1.f);
+	Volume->ApplyPresetMeshes(HighMesh, LowMesh, NoneMesh);
+
+	const bool bAuth = HasAuthority();
+	UE_LOG(LogCoverNet, Log, TEXT("[GS::ApplyPreset] Vol=%s High=%s Low=%s None=%s Start=%.2f Thr=%.2f Auth=%d"),
+		*GetNameSafe(Volume),
+		HighMesh? *HighMesh->GetName():TEXT("null"),
+		LowMesh ? *LowMesh ->GetName():TEXT("null"),
+		NoneMesh?*NoneMesh->GetName():TEXT("null"),
+		StartHealthPct, ThresholdPct, bAuth?1:0);
+
+	if (bAuth)
+	{
+		// If you have immediate health setter on CV:
+		// Volume->SetHealthPercentImmediate(FMath::Clamp(StartHealthPct, 0.f, 1.f));
+		Volume->ForceNetUpdate();
+	}
+}
+
 void AMatchGameMode::BeginPlay()
 {
     Super::BeginPlay();
@@ -1338,6 +1933,12 @@ void AMatchGameMode::BeginPlay()
 	if (AMatchGameState* S = GS())
 	{
 		S->CmPerTTInchRep = CmPerTabletopInch();
+		S->ForceNetUpdate();
+	}
+
+	if (AMatchGameState* S = GS())
+	{
+		S->CoverPresetsTable = CoverPresetsTable; // replicate pointer to clients
 		S->ForceNetUpdate();
 	}
 }
@@ -1604,6 +2205,13 @@ void AMatchGameMode::HandleStartBattle(APlayerController* PC)
 
         S->CurrentTurn = S->CurrentDeployer;
 
+    	if (S->P1 && S->P2 /*&& !bCoverPresetsApplied*/)
+    	{
+    		ApplyCoverPresetsFromTableOnce();
+    		RebroadcastCoverPresetsReliable();
+    		bCoverPresetsApplied = true;
+    	}
+
         ResetUnitRoundStateFor(S->CurrentTurn);
 
         S->SetGlobalSelected(nullptr);
@@ -1866,6 +2474,7 @@ void AMatchGameMode::FinalizePlayerJoin(APlayerController* PC)
 
     if (AMatchGameState* S = GS())
     {
+    	
         ATabletopPlayerState* TPS = PC->GetPlayerState<ATabletopPlayerState>();
         if (!TPS)
         {
@@ -1896,12 +2505,100 @@ void AMatchGameMode::FinalizePlayerJoin(APlayerController* PC)
         }
 
         S->OnDeploymentChanged.Broadcast();
+
+    	if (AMatchPlayerController* MPC = Cast<AMatchPlayerController>(PC))
+    	{
+    		MPC->Client_KickUIRefresh();
+    	}
+
+    	if (S->P1 && S->P2)
+    	{
+    		ApplyCoverPresetsFromTableOnce();
+    		RebroadcastCoverPresetsReliable();
+    		
+    		bCoverPresetsApplied = true;
+    	}
+    }
+}
+
+void AMatchGameMode::ApplyCoverPresetsFromTableOnce()
+{
+    if (!HasAuthority()) return;
+
+    UWorld* W = GetWorld();
+    AMatchGameState* GS = GetGameState<AMatchGameState>();
+    if (!W || !GS || !CoverPresetsTable)
+    {
+        UE_LOG(LogCoverNet, Warning, TEXT("[GM] Missing world/state/table, skipping cover preset apply."));
+        return;
     }
 
-    if (AMatchPlayerController* MPC = Cast<AMatchPlayerController>(PC))
+    // Make sure the DT pointer actually replicates
+    GS->CoverPresetsTable = CoverPresetsTable;
+
+    // Find covers (TActorIterator is fine; your CollectCoverVolumes_AllLevels also works)
+    TArray<ACoverVolume*> Covers;
+    for (TActorIterator<ACoverVolume> It(W); It; ++It) if (*It) Covers.Add(*It);
+
+    if (Covers.Num() == 0)
     {
-        MPC->Client_KickUIRefresh();
+        UE_LOG(LogCoverNet, Warning, TEXT("[GM] No ACoverVolume found; will try again when levels stream in."));
+        return;
     }
+
+    const EFaction F1 = GS->P1 ? GS->P1->SelectedFaction : EFaction::None;
+    const EFaction F2 = GS->P2 ? GS->P2->SelectedFaction : EFaction::None;
+
+    auto FactionForVolume = [&](ACoverVolume* CV)->EFaction
+    {
+        // TODO: replace with your real mapping (zone/team). Hash trick kept for parity with your code.
+        return (GetTypeHash(CV) & 1) ? F1 : F2;
+    };
+
+    GS->CoverAssignments.Reset(Covers.Num());
+
+    int32 Applied = 0;
+    for (ACoverVolume* CV : Covers)
+    {
+        if (!CV) continue;
+
+        const EFaction Fac = FactionForVolume(CV);
+        const bool bPreferLow = CV->bPreferLowCover;
+
+        const FName RowName = PickRowNameForFaction(CoverPresetsTable, Fac, bPreferLow);
+        if (RowName.IsNone())
+        {
+            UE_LOG(LogCoverNet, Warning, TEXT("[GM] No preset row for CV=%s Fac=%d PreferLow=%d"),
+                *GetNameSafe(CV), (int32)Fac, bPreferLow?1:0);
+            continue;
+        }
+
+        const FCoverPresetRow* Row = CoverPresetsTable->FindRow<FCoverPresetRow>(RowName, TEXT("ApplyCoverPresetsFromTableOnce"));
+        if (!Row)
+            continue;
+
+        const float Thr = FMath::Clamp(Row->HighToLowPct, 0.f, 1.f);
+        const float Eps = 0.005f;
+        const float StartPct = (bPreferLow && Row->LowCoverMesh)
+                             ? FMath::Clamp(Thr - Eps, 0.f, 1.f)
+                             : FMath::Clamp(Row->StartHealthPct, 0.f, 1.f);
+
+        FCoverRowAssignment A;
+        A.Volume      = CV;
+        A.RowName     = RowName;
+        A.bPreferLow  = bPreferLow ? 1 : 0;
+        A.StartPct    = StartPct;
+        A.ThresholdPct= Thr;
+
+        GS->CoverAssignments.Add(A);
+        ++Applied;
+    }
+
+    // Apply immediately on the server (listen host), and replicate to clients
+    GS->OnRep_CoverAssignments();
+    GS->ForceNetUpdate();
+
+    UE_LOG(LogCoverNet, Display, TEXT("[GM] Cover presets assigned to %d volumes."), Applied);
 }
 
 void AMatchGameMode::TallyObjectives_EndOfRound()

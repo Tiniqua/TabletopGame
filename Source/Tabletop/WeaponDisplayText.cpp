@@ -14,6 +14,7 @@ namespace
         if (!*C) return TEXT("");
         const UClass* Cls = *C;
 
+        // Prefer Text properties on the CDO
         if (const UObject* CDO = Cls->GetDefaultObject())
         {
             if (const FTextProperty* P = FindFProperty<FTextProperty>(Cls, TEXT("DisplayName")))
@@ -28,7 +29,8 @@ namespace
             }
         }
 
-        return Cls->GetDisplayNameText().ToString();
+        // Final fallback: make a nice string from the raw class name
+        return FName::NameToDisplayString(Cls->GetName(), /*bIsBool*/ false);
     }
 
     bool TryGetKeywordEnumValue(const FWeaponKeywordData& K, int64& OutVal)

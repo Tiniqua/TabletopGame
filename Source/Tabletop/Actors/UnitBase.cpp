@@ -791,6 +791,22 @@ void AUnitBase::NotifyMoveChanged()
     }
 }
 
+void AUnitBase::ApplyFormationOffsetsLocal(const TArray<FVector>& OffsetsLocal)
+{
+    // Ensure the right number of components exist locally on each client
+    RebuildFormation();
+
+    const int32 N = FMath::Min(ModelMeshes.Num(), OffsetsLocal.Num());
+    for (int32 i = 0; i < N; ++i)
+    {
+        if (UStaticMeshComponent* C = ModelMeshes[i])
+        {
+            const FVector P = OffsetsLocal[i];
+            C->SetRelativeLocation(FVector(P.X, P.Y, 0.f));
+        }
+    }
+}
+
 void AUnitBase::RebuildRuntimeAbilitiesFromSources()
 {
     RuntimeAbilities.Empty();
@@ -972,6 +988,8 @@ AActor* AUnitBase::FindNearestEnemyUnit(float MaxSearchDistCm) const
 bool AUnitBase::FaceActorInstant(AActor* Target, float YawSnapDeg)
 {
     if (!Target) return false;
+    CurrentTarget = Target;
+    ForceNetUpdate();
     FVector Dir = Target->GetActorLocation() - GetActorLocation();
     Dir.Z = 0.f;
     if (Dir.IsNearlyZero()) return false;
@@ -1021,6 +1039,7 @@ void AUnitBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetim
     DOREPLIFETIME(AUnitBase, Faction);
     DOREPLIFETIME(AUnitBase, OwningPS);
     DOREPLIFETIME(AUnitBase, WeaponIndex);
+    DOREPLIFETIME(AUnitBase, CurrentTarget);
 
     DOREPLIFETIME(AUnitBase, ModelsCurrent);
     DOREPLIFETIME(AUnitBase, ModelsMax);

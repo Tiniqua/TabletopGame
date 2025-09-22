@@ -7,12 +7,10 @@
 #include "GameFramework/GameStateBase.h"
 #include "Net/UnrealNetwork.h"
 #include "Tabletop/AbiltyEventSubsystem.h"
-#include "Tabletop/UnitActionResourceComponent.h"
 #include "Tabletop/Actors/CoverVolume.h"
 #include "Tabletop/Actors/UnitAction.h"
 
 #include "MatchGameMode.generated.h"
-
 
 struct FRosterEntry;
 class ATabletopPlayerState;
@@ -20,6 +18,44 @@ class ANetDebugTextActor;
 
 class AMatchPlayerController;
 class AUnitBase;
+
+USTRUCT()
+struct FCoverPairKey
+{
+	GENERATED_BODY()
+	UPROPERTY() TWeakObjectPtr<const AUnitBase> A;
+	UPROPERTY() TWeakObjectPtr<const AUnitBase> T;
+	bool operator==(const FCoverPairKey& O) const { return A==O.A && T==O.T; }
+};
+
+
+USTRUCT()
+struct FCoverRowAssignment
+{
+	GENERATED_BODY()
+
+	UPROPERTY() TWeakObjectPtr<ACoverVolume> Volume;
+	UPROPERTY() FName RowName;
+	UPROPERTY() uint8 bPreferLow : 1;
+
+	// Resolved on the server once, replicated so all machines stay in lockstep
+	UPROPERTY() float StartPct     = 1.f;
+	UPROPERTY() float ThresholdPct = 0.5f;
+};
+
+
+FORCEINLINE uint32 GetTypeHash(const FCoverPairKey& K)
+{
+	return ::PointerHash(K.A.Get()) ^ (3u * ::PointerHash(K.T.Get()));
+}
+
+USTRUCT()
+struct FCoverPairCache
+{
+	GENERATED_BODY()
+	UPROPERTY() float LastFraction = 0.f;
+	UPROPERTY() ECoverType LastType = ECoverType::None;
+};
 
 struct FShotResolveResult
 {
@@ -110,9 +146,25 @@ public:
 	UPROPERTY(ReplicatedUsing=OnRep_SelectionVis)
 	AUnitBase* TargetUnitGlobal   = nullptr;
 
+	UPROPERTY(Replicated, EditAnywhere, BlueprintReadWrite, Category="Cover")
+	UDataTable* CoverPresetsTable = nullptr;
+
+	UPROPERTY(ReplicatedUsing=OnRep_CoverAssignments)
+	TArray<FCoverRowAssignment> CoverAssignments;
+
+	UFUNCTION()
+	void OnRep_CoverAssignments();
+
+	void ApplyCoverAssignment(const FCoverRowAssignment& A);
+
 	UFUNCTION()
 	void OnRep_SelectionVis();
 
+	UFUNCTION()
+	void OnLevelAdded(ULevel* Level, UWorld* World);
+
+	void ReapplyAllCoverAssignments();
+	
 	UPROPERTY(Replicated, BlueprintReadOnly, Category="Scale")
 	float CmPerTTInchRep = 50.8f; // uses 20*2.54 from -- float CmPerTabletopInch() const { return 2.54f * TabletopToUnrealInchScale; }
 
@@ -137,6 +189,7 @@ public:
 
 	UFUNCTION()
 	void OnRep_FinalSummary() { OnDeploymentChanged.Broadcast(); }
+	
 
 	UPROPERTY(ReplicatedUsing=OnRep_Summary)
 	bool bShowSummary = false;
@@ -238,6 +291,14 @@ public:
 	UFUNCTION(NetMulticast, Unreliable)
 	void Multicast_ClearPotentialTargets();
 
+	UFUNCTION(NetMulticast, Reliable)
+	void Multicast_ApplyCoverPreset(ACoverVolume* Volume,
+								UStaticMesh* HighMesh,
+								UStaticMesh* LowMesh,
+								UStaticMesh* NoneMesh,
+								float StartHealthPct,
+								float ThresholdPct);
+
 	UPROPERTY(Transient)
 	TArray<TWeakObjectPtr<AUnitBase>> LastPotentialApplied;
 	
@@ -254,6 +315,51 @@ public:
 	int32 ApplyFeelNoPain(int32 IncomingDamage, int32 FnpTN);
 	AMatchGameMode();
 	virtual void HandleSeamlessTravelPlayer(AController*& C) override;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Cover")
+	UDataTable* CoverPresetsTable = nullptr;
+
+	UFUNCTION() void RebroadcastCoverPresetsReliable();
+	UFUNCTION() void OnClientReportedLoaded(class APlayerController* PC);
+	virtual void PostSeamlessTravel() override;
+
+	UPROPERTY() TSet<TWeakObjectPtr<APlayerController>> ClientsLoaded;
+
+	UPROPERTY(EditDefaultsOnly, Category="Cover|Damage")
+	float FriendlyCoverIgnoreProximityInches = 6.f;
+
+	UPROPERTY(EditAnywhere, Category="Cover")
+	float TargetCoverUseProximityInches = 6.0f;
+
+	UFUNCTION(exec)
+	void CoverPreset_Dump();
+	
+	UPROPERTY(Transient)
+	TMap<FCoverPairKey, FCoverPairCache> CoverMemory;
+
+	UPROPERTY(EditDefaultsOnly, Category="Cover|Query")
+	bool bExhaustiveCoverCross = true;  // false = nearest-N (fast), true = all attacker×target pairs
+
+	UPROPERTY(EditDefaultsOnly, Category="Cover|Damage")
+	bool bDistributeCoverDamageAcrossHits = false;
+
+	UFUNCTION(BlueprintCallable, Category="Formation")
+	TArray<FVector> ComputeCohesiveCoveredFormation(
+		const FVector& UnitCenter, const FVector& ThreatDir,
+		int32 ModelCount, float BaseRadiusCm) const;
+	
+
+	bool QueryCoverWithActor(AUnitBase* Attacker, AUnitBase* Target,
+						 int32& OutHitMod, int32& OutSaveMod,
+						 ECoverType& OutType, ACoverVolume*& OutPrimaryCover,
+						 TMap<ACoverVolume*, int32>* OutCoverHits /*=nullptr*/) const;
+
+	// keep the old signature for existing callers
+	bool QueryCover(class AUnitBase* Attacker, class AUnitBase* Target,
+					int32& OutHitMod, int32& OutSaveMod, ECoverType& OutType) const;
+
+	UFUNCTION()
+	void ApplyDelayedCoverDamage(ACoverVolume* Cover, float Damage, FVector DebugLoc, FString DebugMsg);
 
 	// Needed to look up unit display/icon (optional for spawning)
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly)
@@ -301,35 +407,42 @@ public:
 
 	// Cancels any active GS->Preview if this PC owns the Attacker and it's their turn
 	void Handle_CancelPreview(class AMatchPlayerController* PC, class AUnitBase* Attacker);
-	
+
 	// Per-turn reset (call when starting Move for CurrentTurn)
 	void ResetTurnFor(APlayerState* PS);
 	
 	float CmPerTabletopInch() const { return 2.54f * TabletopToUnrealInchScale; }
 
+	UPROPERTY(EditDefaultsOnly, Category="Cover|Query")
+	float CoverModelCoverageThreshold = 0.5f; // >=50% models need cover to claim cover
+
+	UPROPERTY(EditDefaultsOnly, Category="Cover|Query")
+	float CoverHysteresis = 0.15f; // need to drop below (Threshold - Hysteresis) to lose cover
+
+	UPROPERTY(EditDefaultsOnly, Category="Cover|Query")
+	int32 RaysPerTargetModel = 2;   // how many attacker points to sample per target model (nearest muzzles)
+	
 	UPROPERTY(EditDefaultsOnly, Category="Cover")
 	TEnumAsByte<ECollisionChannel> CoverTraceChannel = ECC_GameTraceChannel4;
 
 	// hard cap to keep perf predictable when sampling per-model
 	UPROPERTY(EditDefaultsOnly, Category="Cover")
-	int32 MaxCoverSamplesPerUnit = 4;
+	int32 MaxCoverSamplesPerUnit = 10;
 
 	// NEW: proximity window for cover validity (tabletop inches)
 	UPROPERTY(EditDefaultsOnly, Category="Cover")
-	float CoverProximityInches = 6.f;
+	float CoverProximityInches = 8.f;
 
 	// NEW: toggle draw-debug lines/text for cover traces
 	UPROPERTY(EditDefaultsOnly, Category="Cover|Debug")
 	bool bDebugCoverTraces = true;
 
-	// Simple center-to-center line; returns first cover hit (if any)
-	bool ComputeCoverBetween(const FVector& From, const FVector& To, ECoverType& OutType) const;
-
-	// Full query with per-model fallback; returns modifiers
-	bool QueryCover(class AUnitBase* Attacker, class AUnitBase* Target,
-					int32& OutHitMod, int32& OutSaveMod, ECoverType& OutType) const;
-
 	UDataTable* UnitsForFaction(EFaction Faction) const;
+
+	UFUNCTION(BlueprintCallable, Category="Cover")
+	void ApplyCoverPresetsFromTableOnce();
+
+	bool bCoverPresetsApplied = false;
 	
 protected:
 	virtual void BeginPlay() override;

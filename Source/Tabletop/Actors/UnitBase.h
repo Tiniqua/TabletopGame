@@ -179,6 +179,7 @@ public:
     UPROPERTY(ReplicatedUsing=OnRep_Move) float MoveMaxInches    = 0.f;
 
     UPROPERTY(Replicated) bool bHasShot         = false;
+    UPROPERTY(Replicated) AActor* CurrentTarget = nullptr;
 
     // ---------- Replicated stat snapshot ----------
     UPROPERTY(Replicated) int32 ToughnessRep = 0;
@@ -263,6 +264,9 @@ public:
     UPROPERTY(EditAnywhere, Category="Formation", meta=(ClampMin="-180.0", ClampMax="180.0"))
     float ModelYawVisualOffsetDeg = 0.0f;
 
+    UPROPERTY(EditDefaultsOnly, Category="Unit|Visual")
+    float ModelSpacingApartCm = 80.f; // ~1.18 inches; tweak for your base sizes
+
     // ===== Visual-only facing (no actor rotation) =====
 
     UFUNCTION(BlueprintCallable, Category="Facing")
@@ -330,6 +334,10 @@ public:
     UFUNCTION(BlueprintCallable, Category="Selection|Outline")
     void SetHighlightLocal(EUnitHighlight Mode);
 
+
+    UFUNCTION()
+    void ApplyFormationOffsetsLocal(const TArray<FVector>& OffsetsLocal);
+    
     void RebuildFormation();
     
 protected:
@@ -351,6 +359,8 @@ protected:
     void RebuildRuntimeActions();
     void RebuildRuntimeAbilitiesFromSources();
 
+    
+
     virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Out) const override;
 
     UPROPERTY(VisibleAnywhere) USphereComponent* SelectCollision = nullptr;
@@ -369,9 +379,6 @@ protected:
 
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Formation", meta=(ClampMin="0.05", ClampMax="10.0"))
     float ModelScale = 1.0f;
-
-    UPROPERTY(EditDefaultsOnly, Category="Unit|Visual")
-    float ModelSpacingApartCm = 80.f; // ~1.18 inches; tweak for your base sizes
     
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Selection|Outline")
     UMaterialInterface* OutlineFriendlyMaterial = nullptr;

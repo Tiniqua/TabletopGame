@@ -6,6 +6,7 @@
 #include "Blueprint/WidgetBlueprintLibrary.h"
 #include "GameFramework/PlayerState.h"
 #include "Tabletop/SetupWidget.h"
+#include "Tabletop/Gamemodes/MatchGameMode.h"
 #include "Tabletop/Gamemodes/SetupGamemode.h"
 #include "Tabletop/PlayerStates/TabletopPlayerState.h"
 
@@ -22,6 +23,30 @@ void ASetupPlayerController::Server_AdvanceFromLobby_Implementation()
 	if (ASetupGamemode* GM = GetWorld()->GetAuthGameMode<ASetupGamemode>())
 	{
 		GM->TryAdvanceFromLobby();
+	}
+}
+
+void ASetupPlayerController::BeginPlayingState()
+{
+	Super::BeginPlayingState();
+
+	// Only the client should report readiness to the server
+	if (!HasAuthority() && IsLocalController())
+	{
+		const FName MapName = FName(*GetWorld()->GetMapName()); // PIE-safe is fine for identity here
+		if (MapName != LastReportedMap)
+		{
+			LastReportedMap = MapName;
+			Server_ReportClientWorldReady(MapName);
+		}
+	}
+}
+
+void ASetupPlayerController::Server_ReportClientWorldReady_Implementation(FName WorldPackageName)
+{
+	if (AMatchGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<AMatchGameMode>() : nullptr)
+	{
+		GM->OnClientReportedLoaded(this);
 	}
 }
 
