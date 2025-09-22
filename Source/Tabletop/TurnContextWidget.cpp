@@ -3,6 +3,7 @@
 #include "ActionButtonWidget.h"
 #include "KeywordChipWidget.h"
 #include "LibraryHelpers.h"
+#include "UnitActionResourceComponent.h"
 #include "WeaponDisplayText.h"
 #include "WeaponKeywordHelpers.h"
 #include "Components/PanelWidget.h"

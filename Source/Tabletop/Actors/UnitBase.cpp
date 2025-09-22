@@ -215,6 +215,16 @@ void AUnitBase::Server_InitFromRow(APlayerState* OwnerPS, const FUnitRow& Row, i
     MoveMaxInches    = static_cast<float>(Row.MoveInches);
     MoveBudgetInches = 0.f;
 
+    FX_Muzzle       = Row.FX_Muzzle;
+    FX_Impact       = Row.FX_Impact;
+    Snd_Muzzle      = Row.Snd_Muzzle;
+    Snd_Impact      = Row.Snd_Impact;
+    Snd_Selected    = Row.Snd_Selected;
+    Snd_UnderFire   = Row.Snd_UnderFire;
+    SndAttenuation  = Row.SndAttenuation;
+    SndConcurrency  = Row.SndConcurrency;
+    ImpactDelaySeconds = Row.ImpactDelaySeconds;
+
     if (Row.Weapons.Num() > 0)
     {
         WeaponIndex   = FMath::Clamp(InWeaponIndex, 0, Row.Weapons.Num() - 1);
@@ -647,6 +657,12 @@ void AUnitBase::OnDamaged(int32 ModelsLost, int32 /*WoundsOverflow*/)
     ModelsCurrent = FMath::Clamp(ModelsCurrent - FMath::Max(0, ModelsLost), 0, ModelsMax);
     RebuildFormation();
     ForceNetUpdate();
+
+    if (Snd_UnderFire)
+    {
+        UGameplayStatics::PlaySoundAtLocation(this, Snd_UnderFire, GetActorLocation(),
+            1.f, 1.f, 0.f, SndAttenuation, SndConcurrency);
+    }
 }
 
 void AUnitBase::OnRep_Health()
@@ -754,6 +770,12 @@ void AUnitBase::SetHighlightLocal(EUnitHighlight Mode)
 void AUnitBase::OnSelected()
 {
     SetHighlightLocal(EUnitHighlight::Friendly);
+
+    if (Snd_Selected)
+    {
+        UGameplayStatics::PlaySoundAtLocation(this, Snd_Selected, GetActorLocation(),
+            1.f, 1.f, 0.f, SndAttenuation, SndConcurrency);
+    }
 }
 
 void AUnitBase::OnDeselected()

@@ -74,7 +74,7 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category="Cover|Destruction")
 	void ApplyCoverDamage(float Incoming);
-
+	
 	UPROPERTY(Transient)
 	ECoverType LastAppliedType = ECoverType::None;
 

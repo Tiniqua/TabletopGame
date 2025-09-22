@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "NiagaraSystem.h"
 #include "WeaponKeywords.h"
 #include "Engine/DataTable.h"
 #include "UObject/Object.h"
@@ -98,6 +99,36 @@ struct FUnitRow : public FTableRowBase
 
     // Weapons
     UPROPERTY(EditAnywhere, BlueprintReadWrite) TArray<FWeaponProfile> Weapons;
+
+    // ====== NEW AUDIO / VFX ======
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="VFX|Audio")
+    UNiagaraSystem* FX_Muzzle = nullptr;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="VFX|Audio")
+    UNiagaraSystem* FX_Impact = nullptr;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="VFX|Audio")
+    USoundBase* Snd_Muzzle = nullptr;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="VFX|Audio")
+    USoundBase* Snd_Impact = nullptr;
+
+    // Voice lines
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="VFX|Audio")
+    USoundBase* Snd_Selected = nullptr;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="VFX|Audio")
+    USoundBase* Snd_UnderFire = nullptr;
+
+    // Optional common settings
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="VFX|Audio")
+    USoundAttenuation* SndAttenuation = nullptr;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="VFX|Audio")
+    USoundConcurrency* SndConcurrency = nullptr;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="VFX|Audio")
+    float ImpactDelaySeconds = 1.0f;
 };
 
 USTRUCT(BlueprintType)
