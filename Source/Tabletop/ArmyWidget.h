@@ -2,9 +2,11 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "ArmyData.h"
 #include "Blueprint/UserWidget.h"
 #include "ArmyWidget.generated.h"
 
+class UUniformGridPanel;
 class UTextBlock;
 class UComboBoxString;
 class UButton;
@@ -17,6 +19,7 @@ class TABLETOP_API UArmyWidget : public UUserWidget
 public:
 	UFUNCTION()
 	void OnReadyUpChanged();
+
 	
 protected:
 	virtual void NativeConstruct() override;
@@ -26,10 +29,10 @@ protected:
 	UPROPERTY(meta=(BindWidget)) UTextBlock* P2Name = nullptr;
 	UPROPERTY(meta=(BindWidget)) UTextBlock* P1PickText = nullptr;
 	UPROPERTY(meta=(BindWidget)) UTextBlock* P2PickText = nullptr;
-	UPROPERTY(meta=(BindWidget)) UComboBoxString* FactionDropdown = nullptr;
 	UPROPERTY(meta=(BindWidget)) UButton* P1ReadyBtn = nullptr;
 	UPROPERTY(meta=(BindWidget)) UButton* P2ReadyBtn = nullptr;
 	UPROPERTY(meta=(BindWidget)) UButton* BothReady = nullptr;
+	UPROPERTY(meta=(BindWidget)) UUniformGridPanel* FactionGrid = nullptr;
 
 private:
 	UFUNCTION()
@@ -43,7 +46,13 @@ private:
 	UFUNCTION()
 	void OnBothReadyClicked();
 
+	TMap<UButton*, EFaction> ButtonToFaction;
+
+	UFUNCTION()
+	void HandleFactionTileClicked();
+
+	void BuildFactionGrid();
+
 	class ASetupGameState* GS() const;
 	class ASetupPlayerController* PC() const;
-	void BuildFactionDropdown(); // from replicated UnitsTable (or fallback to enum)
 };

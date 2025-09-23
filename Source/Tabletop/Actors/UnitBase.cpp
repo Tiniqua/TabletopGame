@@ -1,4 +1,3 @@
-#pragma optimize("",off)
 
 #include "UnitBase.h"
 
@@ -239,6 +238,14 @@ void AUnitBase::Server_InitFromRow(APlayerState* OwnerPS, const FUnitRow& Row, i
     WoundsRep    = Row.Wounds;
     SaveRep      = Row.Save;
     bOverwatchArmed = false;
+
+    // could check if we dont have a valid one first but might do in some cases and want DT to overwrite
+    if (Row.ModelMesh)
+    {
+        ModelMesh = Row.ModelMesh;
+        RebuildFormation();      // server visuals
+        OnRep_ModelVisual();     // optional: immediate apply for listen server (local)
+    }
 
     InvulnerableSaveRep = FMath::Clamp(Row.InvulnSave, 2, 7);
     FeelNoPainRep       = FMath::Clamp(Row.FeelNoPain, 2, 7);
@@ -1088,6 +1095,26 @@ bool AUnitBase::IsEnemy(const AUnitBase* Other) const
     return false;
 }
 
+void AUnitBase::OnRep_ModelVisual()
+{
+    // If components already exist, apply the new mesh to them
+    bool bApplied = false;
+    for (UStaticMeshComponent* C : ModelMeshes)
+    {
+        if (IsValid(C))
+        {
+            C->SetStaticMesh(ModelMesh);
+            bApplied = true;
+        }
+    }
+
+    // If we didn’t have components yet (or count changed), rebuild now
+    if (!bApplied || ModelMeshes.Num() != FMath::Max(0, ModelsCurrent))
+    {
+        RebuildFormation();
+    }
+}
+
 void AUnitBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
     Super::GetLifetimeReplicatedProps(OutLifetimeProps);
@@ -1101,6 +1128,7 @@ void AUnitBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetim
 
     DOREPLIFETIME(AUnitBase, ModelsCurrent);
     DOREPLIFETIME(AUnitBase, ModelsMax);
+    DOREPLIFETIME(AUnitBase, ModelMesh);
 
     DOREPLIFETIME(AUnitBase, MoveBudgetInches);
     DOREPLIFETIME(AUnitBase, MoveMaxInches);

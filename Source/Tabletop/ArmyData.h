@@ -100,6 +100,9 @@ struct FUnitRow : public FTableRowBase
     // Weapons
     UPROPERTY(EditAnywhere, BlueprintReadWrite) TArray<FWeaponProfile> Weapons;
 
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Model")
+    UStaticMesh* ModelMesh = nullptr;
+
     // ====== NEW AUDIO / VFX ======
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="VFX|Audio")
     UNiagaraSystem* FX_Muzzle = nullptr;
@@ -143,6 +146,9 @@ struct FFactionRow : public FTableRowBase
     // Human-readable name (e.g. "Adeptus Astartes")
     UPROPERTY(EditAnywhere, BlueprintReadWrite)
     FText DisplayName;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite)
+    UTexture2D* Icon = nullptr;
 
     // Reference to a DataTable containing this faction's units
     UPROPERTY(EditAnywhere, BlueprintReadWrite)

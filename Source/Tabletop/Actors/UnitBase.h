@@ -356,8 +356,11 @@ protected:
 
     UPROPERTY(VisibleAnywhere) USphereComponent* SelectCollision = nullptr;
 
-    UPROPERTY(EditDefaultsOnly, Category="Unit|Visual")
+    UPROPERTY(ReplicatedUsing=OnRep_ModelVisual, EditDefaultsOnly, Category="Unit|Visual")
     UStaticMesh* ModelMesh = nullptr;
+    
+    UFUNCTION()
+    void OnRep_ModelVisual();
 
     UPROPERTY(EditDefaultsOnly, Category="Unit|Visual")
     int32 GridColumns = 3;

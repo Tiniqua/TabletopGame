@@ -3,22 +3,150 @@
 
 #include "ArmyData.h"
 #include "NameUtils.h"
+#include "Blueprint/WidgetTree.h"
 #include "Components/Button.h"
+#include "Components/ButtonSlot.h"
 #include "Components/ComboBoxString.h"
+#include "Components/Image.h"
+#include "Components/ScaleBox.h"
+#include "Components/SizeBox.h"
 #include "Components/TextBlock.h"
+#include "Components/UniformGridPanel.h"
+#include "Components/UniformGridSlot.h"
 #include "Controllers/SetupPlayerController.h"
-#include "GameFramework/PlayerState.h"
 #include "Gamemodes/SetupGamemode.h"
+
+namespace
+{
+    // fixed tile size
+    constexpr float kTile = 128.f;
+    constexpr int32 kCols = 5; // tweak to taste
+}
 
 namespace FactionNameConverter
 {
-    FString FactionDisplay(EFaction F)
+    static FString FactionDisplay(EFaction F)
     {
         if (UEnum* Enum = StaticEnum<EFaction>())
-        {
             return Enum->GetDisplayNameTextByValue((int64)F).ToString();
-        }
         return TEXT("Unknown");
+    }
+}
+
+
+void UArmyWidget::BuildFactionGrid()
+{
+    if (!FactionGrid) return;
+    FactionGrid->ClearChildren();
+    ButtonToFaction.Empty();
+
+    TArray<FFactionRow> Rows;
+
+    if (ASetupGameState* S = GS(); S && S->FactionsTable)
+    {
+        for (const auto& KV : S->FactionsTable->GetRowMap())
+        {
+            if (const FFactionRow* Row = reinterpret_cast<const FFactionRow*>(KV.Value))
+            {
+                if (Row->Faction != EFaction::None)
+                {
+                    Rows.Add(*Row);
+                }
+            }
+        }
+    }
+
+    // Fallback: build from enum with no icons (optional)
+    if (Rows.Num() == 0)
+    {
+        if (const UEnum* Enum = StaticEnum<EFaction>())
+        {
+            const int32 Num = Enum->NumEnums();
+            for (int32 i=0;i<Num;++i)
+            {
+#if WITH_EDITOR
+                if (Enum->HasMetaData(TEXT("Hidden"), i) || Enum->HasMetaData(TEXT("HiddenByDefault"), i))
+                    continue;
+#endif
+                const int64 Value = Enum->GetValueByIndex(i);
+                if (!Enum->IsValidEnumValue(Value)) continue;
+                const FName Name = Enum->GetNameByIndex(i);
+                if (Name.ToString().EndsWith(TEXT("_MAX"))) continue;
+
+                const EFaction F = static_cast<EFaction>(Value);
+                if (F == EFaction::None) continue;
+
+                FFactionRow R;
+                R.Faction = F;
+                R.DisplayName = FText::FromString(FactionNameConverter::FactionDisplay(F));
+                R.Icon = nullptr; // no icon known here
+                Rows.Add(R);
+            }
+        }
+    }
+
+    // Sort by display name
+    Rows.Sort([](const FFactionRow& A, const FFactionRow& B){
+        return A.DisplayName.ToString() < B.DisplayName.ToString();
+    });
+
+    // Build fixed-size tiles
+    int32 idx = 0;
+    for (const FFactionRow& R : Rows)
+    {
+        const int32 Row = idx / kCols;
+        const int32 Col = idx % kCols;
+        ++idx;
+
+        USizeBox* Size = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass());
+        Size->SetWidthOverride(kTile);
+        Size->SetHeightOverride(kTile);
+
+        // Button fills the SizeBox
+        UButton* Btn = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass());
+
+        // Make the button's content fill its slot
+        if (UButtonSlot* BS = Cast<UButtonSlot>(Btn->Slot))
+        {
+            BS->SetHorizontalAlignment(HAlign_Fill);
+            BS->SetVerticalAlignment(VAlign_Fill);
+        }
+
+        // ScaleBox makes the image fill uniformly (choose one)
+        // EStretch::Fill        -> stretches (can distort aspect)
+        // EStretch::ScaleToFit  -> letterboxes, preserves aspect
+        // EStretch::ScaleToFill -> fills without letterbox, preserves aspect (may crop)
+        UScaleBox* Scale = WidgetTree->ConstructWidget<UScaleBox>(UScaleBox::StaticClass());
+        Scale->SetStretch(EStretch::Fill); // or ScaleToFit / ScaleToFill
+
+        UImage* Img = WidgetTree->ConstructWidget<UImage>(UImage::StaticClass());
+        if (R.Icon)
+        {
+            Img->SetBrushFromTexture(R.Icon, /*bMatchSize*/ true);
+        }
+        else
+        {
+            // optional: placeholder tint
+            Img->SetColorAndOpacity(FLinearColor(0.1f,0.1f,0.1f,1.f));
+        }
+
+        // IMPORTANT: don't set Brush.ImageSize or SetBrushSize here.
+        // Let the ScaleBox control the final size.
+
+        Scale->AddChild(Img);
+        Btn->AddChild(Scale);
+        Size->AddChild(Btn);
+
+        // Add to grid (as you already do)
+        if (UUniformGridSlot* CurrentSlot = FactionGrid->AddChildToUniformGrid(Size, Row, Col))
+        {
+            CurrentSlot->SetHorizontalAlignment(HAlign_Center);
+            CurrentSlot->SetVerticalAlignment(VAlign_Center);
+        }
+
+        // Remember mapping and bind click
+        ButtonToFaction.Add(Btn, R.Faction);
+        Btn->OnClicked.AddDynamic(this, &UArmyWidget::HandleFactionTileClicked);
     }
 }
 
@@ -72,7 +200,6 @@ void UArmyWidget::OnReadyUpChanged()
 void UArmyWidget::NativeConstruct()
 {
     Super::NativeConstruct();
-
     if (ASetupGameState* S = GS())
     {
         S->OnPlayerReadyUp.AddDynamic(this, &UArmyWidget::OnReadyUpChanged);
@@ -85,13 +212,10 @@ void UArmyWidget::NativeConstruct()
         S->bP1Ready = false;
         S->bP2Ready = false;
     }
-        
 
-    if (FactionDropdown)
-    {
-        FactionDropdown->OnSelectionChanged.AddDynamic(this, &UArmyWidget::OnFactionChanged);
-        BuildFactionDropdown();
-    }
+    // REMOVE: BuildFactionDropdown();
+    BuildFactionGrid();
+
     if (P1ReadyBtn) P1ReadyBtn->OnClicked.AddDynamic(this, &UArmyWidget::OnP1ReadyClicked);
     if (P2ReadyBtn) P2ReadyBtn->OnClicked.AddDynamic(this, &UArmyWidget::OnP2ReadyClicked);
     if (BothReady)  BothReady ->OnClicked.AddDynamic(this, &UArmyWidget::OnBothReadyClicked);
@@ -107,73 +231,6 @@ void UArmyWidget::NativeDestruct()
         S->OnPhaseChanged.RemoveDynamic(this, &UArmyWidget::RefreshFromState);
     }
     Super::NativeDestruct();
-}
-
-void UArmyWidget::BuildFactionDropdown()
-{
-    if (!FactionDropdown) return;
-    FactionDropdown->ClearOptions();
-
-    TSet<EFaction> Seen;
-
-    if (ASetupGameState* S = GS(); S && S->FactionsTable)
-    {
-        // iterate the factions table rows
-        for (const auto& Pair : S->FactionsTable->GetRowMap())
-        {
-            if (const FFactionRow* Row = reinterpret_cast<const FFactionRow*>(Pair.Value))
-            {
-                if (Row->Faction != EFaction::None)
-                {
-                    Seen.Add(Row->Faction);
-                }
-            }
-        }
-    }
-
-    // Fallback: use the entire enum
-    if (Seen.Num() == 0)
-    {
-        if (const UEnum* Enum = StaticEnum<EFaction>())
-        {
-            const int32 Num = Enum->NumEnums();
-            for (int32 i = 0; i < Num; ++i)
-            {
-#if WITH_EDITOR
-                // These keys exist only in editor builds
-                if (Enum->HasMetaData(TEXT("Hidden"), i) ||
-                    Enum->HasMetaData(TEXT("HiddenByDefault"), i))
-                {
-                    continue;
-                }
-#endif
-                const int64 Value = Enum->GetValueByIndex(i);
-
-                // Runtime-safe guards
-                if (!Enum->IsValidEnumValue(Value))          continue; // skip invalid
-                if (Enum->GetNameByIndex(i).ToString().EndsWith(TEXT("_MAX")))
-                    continue; // skip sentinels if you use them
-
-                const EFaction F = static_cast<EFaction>(Value);
-                if (F != EFaction::None)
-                {
-                    Seen.Add(F);
-                }
-            }
-        }
-    }
-
-
-    // Sort by display name
-    TArray<EFaction> List = Seen.Array();
-    List.Sort([](EFaction A, EFaction B) {
-        return FactionNameConverter::FactionDisplay(A) < FactionNameConverter::FactionDisplay(B);
-    });
-
-    for (EFaction F : List)
-    {
-        FactionDropdown->AddOption(FactionNameConverter::FactionDisplay(F));
-    }
 }
 
 void UArmyWidget::RefreshFromState()
@@ -246,5 +303,32 @@ void UArmyWidget::OnBothReadyClicked()
     {
         LPC->Server_SnapshotSetupToPS();
         LPC->Server_AdvanceFromArmy();
+    }
+}
+
+void UArmyWidget::HandleFactionTileClicked()
+{
+    // Find which button fired
+    UButton* Sender = nullptr;
+
+    // Unreal’s dynamic delegates don’t pass the sender, so we query focus/hover as a practical workaround:
+    // (If you want a rock-solid pattern, use a small custom tile widget that stores EFaction and binds through it.)
+    for (const auto& KV : ButtonToFaction)
+    {
+        if (KV.Key && (KV.Key->HasKeyboardFocus() || KV.Key->IsHovered()))
+        {
+            Sender = KV.Key;
+            break;
+        }
+    }
+
+    if (!Sender) return;
+
+    if (EFaction* Pick = ButtonToFaction.Find(Sender))
+    {
+        if (ASetupPlayerController* LPC = PC())
+        {
+            LPC->Server_SelectFaction(*Pick);
+        }
     }
 }
