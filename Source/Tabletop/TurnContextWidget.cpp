@@ -132,6 +132,7 @@ void UTurnContextWidget::HandleSelectedUnitMoveChanged()
     AMatchPlayerController* P = MPC();
     AUnitBase* Sel = P ? P->SelectedUnit : nullptr;
     UpdateMovementUI(Sel);
+    Sel->UpdateRangePreview(false);
     RebuildActionButtons(Sel);
 }
 

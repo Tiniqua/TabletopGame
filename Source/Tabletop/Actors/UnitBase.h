@@ -328,18 +328,20 @@ public:
     void ApplyFormationOffsetsLocal(const TArray<FVector>& OffsetsLocal);
     
     void RebuildFormation();
+    UFUNCTION()
+    void OnRep_Move();
+
+    void RefreshRangeIfActive();
     
 protected:
     virtual void BeginPlay() override;
 
     UFUNCTION()
     void OnRep_Models();
-    UFUNCTION()
-    void OnRep_Move();
-
+    
     void EnsureRangeDecal();
     void SetRangeVisible(float RadiusCm, const FLinearColor& Color, ERangeVizMode Mode);
-    void RefreshRangeIfActive();
+    
     float GetCmPerTTInch_Safe() const;
 
     ERangeVizMode CurrentRangeMode = ERangeVizMode::None;

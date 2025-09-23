@@ -338,21 +338,13 @@ void AMatchPlayerController::Server_RequestAdvance_Implementation(AUnitBase* Uni
 	}
 }
 
-void AMatchPlayerController::Client_OnAdvanced_Implementation(AUnitBase* Unit, int32 BonusInches)
+void AMatchPlayerController::Client_OnAdvanced_Implementation(AUnitBase* Unit, int32 Bonus)
 {
-	
-	if (UTurnContextWidget* W = /* however you obtain your HUD widget */ nullptr)
-	{
-		// if (W->AdvanceLabel)
-		// {
-		// 	W->AdvanceLabel->SetText(FText::FromString(
-		// 		FString::Printf(TEXT("+%d inches"), BonusInches)));
-		// }
-		// if (W->AdvanceBtn)
-		// {
-		// 	W->AdvanceBtn->SetIsEnabled(false);
-		// }
-	}
+	if (!IsValid(Unit)) return;
+
+	// Kick the UI & ring right now on THIS client
+	Unit->NotifyMoveChanged();     // fires bound widget to UpdateMovementUI + UpdateRangePreview
+	Unit->RefreshRangeIfActive();  // safety net to refresh the decal if it’s already visible
 }
 
 void AMatchPlayerController::Server_SetGlobalSelectedUnit_Implementation(AUnitBase* NewSel)

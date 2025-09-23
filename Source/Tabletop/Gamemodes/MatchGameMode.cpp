@@ -1260,6 +1260,9 @@ void AMatchGameMode::Handle_MoveUnit(AMatchPlayerController* PC, AUnitBase* Unit
     Unit->MoveBudgetInches = FMath::Max(0.f, Unit->MoveBudgetInches - spentTTIn);
     Unit->bMovedThisTurn = true;      // NEW: track moved for Heavy/Assault logic
     Unit->SetActorLocation(finalDest);
+	Unit->NotifyMoveChanged();
+	Unit->OnRep_Move();
+	Unit->ForceNetUpdate();
 
 	const FVector Center = Unit->GetActorLocation();
 	const FVector ThreatDir = (Unit->CurrentTarget->GetActorLocation() - Center).GetSafeNormal2D(); // or the most threatening direction
@@ -2396,6 +2399,8 @@ void AMatchGameMode::Handle_AdvanceUnit(AMatchPlayerController* PC, AUnitBase* U
 
     Unit->MoveBudgetInches += (float)Bonus;
     Unit->bAdvancedThisTurn = true;
+	Unit->NotifyMoveChanged();
+	Unit->OnRep_Move();
     Unit->ForceNetUpdate();
 
     if (AMatchGameState* S2 = GS())

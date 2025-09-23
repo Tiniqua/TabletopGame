@@ -1,3 +1,5 @@
+#pragma optimize("",off)
+
 #include "UnitBase.h"
 
 #include "EngineUtils.h"
@@ -12,6 +14,7 @@
 #include "Kismet/GameplayStatics.h"
 #include "Tabletop/UnitActionResourceComponent.h"
 #include "Tabletop/WeaponKeywordHelpers.h"
+#include "Tabletop/Controllers/MatchPlayerController.h"
 #include "Tabletop/Gamemodes/MatchGameMode.h"
 #include "Tabletop/PlayerStates/TabletopPlayerState.h"
 
@@ -83,15 +86,29 @@ void AUnitBase::EnsureRangeDecal()
 
 float AUnitBase::GetCmPerTTInch_Safe() const
 {
-    // Prefer GameMode (server), else a replicated fallback on GameState, else constant 50.8 cm/inch
-    if (AMatchGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<AMatchGameMode>() : nullptr)
-        return GM->CmPerTabletopInch();
-    if (const AMatchGameState* GS = GetWorld() ? GetWorld()->GetGameState<AMatchGameState>() : nullptr)
+    float cp = 0.f;
+
+    if (const AMatchGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<AMatchGameMode>() : nullptr)
     {
-        return GS->CmPerTTInchRep;
+        cp = GM->CmPerTabletopInch();
     }
-       
-    return 50.8f;
+
+    // If GM not set or returned 0/invalid, try GS
+    if (cp <= KINDA_SMALL_NUMBER)
+    {
+        if (const AMatchGameState* GS = GetWorld() ? GetWorld()->GetGameState<AMatchGameState>() : nullptr)
+        {
+            cp = GS->CmPerTTInchRep;
+        }
+    }
+
+    // Final safety net
+    if (cp <= KINDA_SMALL_NUMBER)
+    {
+        cp = 50.8f; // 1 tabletop inch in cm (your original default)
+    }
+
+    return cp;
 }
 
 void AUnitBase::SetRangeVisible(float RadiusCm, const FLinearColor& Color, ERangeVizMode Mode)
@@ -105,22 +122,25 @@ void AUnitBase::SetRangeVisible(float RadiusCm, const FLinearColor& Color, ERang
         return;
     }
 
-    // Size decal: X/Y are extents in cm (radius); Z is thickness
+    // Size decal: X/Y extents, Z thickness (for your rotated -90° setup)
     RangeDecal->DecalSize = FVector(RangeDecalThickness, RadiusCm, RadiusCm);
-    RangeDecal->SetRelativeLocation(FVector(0.f, 0.f, 5.f)); // small lift to avoid z-fight
+    RangeDecal->SetRelativeLocation(FVector(0.f, 0.f, 5.f));
 
     if (RangeMID)
     {
         RangeMID->SetVectorParameterValue(TEXT("TintColor"), Color);
-        // If you prefer parameterized radius instead of DecalSize scaling:
         RangeMID->SetScalarParameterValue(TEXT("RadiusCm"), RadiusCm);
     }
 
-    // Optional probe (kept hidden)
     if (RangeProbe) RangeProbe->SetSphereRadius(RadiusCm);
 
     RangeDecal->SetVisibility(true);
     RangeDecal->SetHiddenInGame(false);
+
+    // Decal components sometimes need this to re-evaluate bounds/size
+    RangeDecal->MarkRenderStateDirty();         // <- force the component to refresh
+    // Optionally: RangeDecal->RecreateRenderState_Concurrent(); (heavier)
+
     CurrentRangeMode = Mode;
 }
 
@@ -172,14 +192,27 @@ void AUnitBase::RefreshRangeIfActive()
     const AMatchGameState* S = GetWorld() ? GetWorld()->GetGameState<AMatchGameState>() : nullptr;
     if (!S) return;
 
-    const bool bAsTarget = (S->TargetUnitGlobal == this);
-    const bool bAsSel    = (S->SelectedUnitGlobal == this);
+    bool bAsTarget = (S->TargetUnitGlobal == this);
+    bool bAsSel    = (S->SelectedUnitGlobal == this);
+
+    // ALSO consider the local player's selection (use your actual controller class)
+    if (!bAsSel)
+    {
+        if (const AMatchPlayerController* PC = GetWorld()->GetFirstPlayerController<AMatchPlayerController>())
+        {
+            if (PC->SelectedUnit == this)
+            {
+                bAsSel = true;
+            }
+        }
+    }
 
     if (!bAsTarget && !bAsSel)
     {
         HideRangePreview();
         return;
     }
+
     UpdateRangePreview(/*bAsTargetContext*/ bAsTarget);
 }
 
@@ -771,6 +804,8 @@ void AUnitBase::OnSelected()
 {
     SetHighlightLocal(EUnitHighlight::Friendly);
 
+    UpdateRangePreview(/*bAsTargetContext=*/false);
+
     if (Snd_Selected)
     {
         UGameplayStatics::PlaySoundAtLocation(this, Snd_Selected, GetActorLocation(),
@@ -781,6 +816,7 @@ void AUnitBase::OnSelected()
 void AUnitBase::OnDeselected()
 {
     SetHighlightLocal(EUnitHighlight::None);
+    HideRangePreview();
 }
 
 
