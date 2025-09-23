@@ -235,6 +235,9 @@ public:
     UFUNCTION() void OnDeselected();
     UFUNCTION() void OnDamaged(int32 ModelsLost, int32 WoundsOverflow = 0);
 
+    UFUNCTION(NetMulticast, Reliable)
+    void Multicast_OnDamaged(int32 ModelsLost, int32 WoundsOverflow = 0);
+
     // Utilities
     float GetWeaponRange()  const { return (float)WeaponRangeInchesRep; }
     int32 GetAttacks()      const { return WeaponAttacksRep; }

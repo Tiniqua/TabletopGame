@@ -667,11 +667,15 @@ void AUnitBase::ApplyDamage_Server(int32 Damage)
 {
     if (!HasAuthority() || Damage <= 0) return;
 
+    const int32 OldModels = ModelsCurrent;
+
     WoundsPool = FMath::Max(0, WoundsPool - Damage);
 
     const int32 PerModel = FMath::Max(1, WoundsRep);
     int32 NewModels = (WoundsPool + PerModel - 1) / PerModel;
     NewModels = FMath::Clamp(NewModels, 0, ModelsMax);
+
+    const int32 ModelsLost = FMath::Max(0, OldModels - NewModels);
 
     if (NewModels != ModelsCurrent)
     {
@@ -679,14 +683,15 @@ void AUnitBase::ApplyDamage_Server(int32 Damage)
         RebuildFormation();
     }
 
-    if (Snd_UnderFire)
+    // fire-and-forget audio/FX to everyone
+    if (ModelsLost > 0)
     {
-        UGameplayStatics::PlaySoundAtLocation(this, Snd_UnderFire, GetActorLocation(),
-            1.f, 1.f, 0.f, SndAttenuation, SndConcurrency);
+        Multicast_OnDamaged(ModelsLost, /*Overflow*/0);
     }
 
     if (WoundsPool <= 0)
     {
+        // (Multicast already sent above; location-based sound will still play after destroy)
         Destroy();
         return;
     }
@@ -698,6 +703,11 @@ void AUnitBase::ApplyMortalDamage_Server(int32 Damage)
 {
     // For now treat as normal unsavable damage; can extend if you track separate pools.
     ApplyDamage_Server(Damage);
+}
+
+void AUnitBase::Multicast_OnDamaged_Implementation(int32 ModelsLost, int32 WoundsOverflow)
+{
+    OnDamaged(ModelsLost, WoundsOverflow);
 }
 
 void AUnitBase::OnDamaged(int32 ModelsLost, int32 /*WoundsOverflow*/)

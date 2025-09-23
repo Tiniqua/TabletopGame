@@ -1417,16 +1417,17 @@ FShotResolveResult AMatchGameMode::ResolveRangedAttack_Internal(
 	const bool bHasAssault = UWeaponKeywordHelpers::HasKeyword(Weapon, EWeaponKeyword::Assault);
 	const FWeaponKeywordData* RF = UWeaponKeywordHelpers::FindKeyword(Weapon, EWeaponKeyword::RapidFire);
 
+	// TODO - Disabling block as now action points are the only blocker for shooting - we should not prevent if we get to this point
 	// Assault: allow shooting after Advance; if not Assault and advanced, disallow
-	if (Ctx.bAttackerAdvanced && !bHasAssault)
-	{
-		if (AMatchGameState* S2 = GS())
-			S2->Multicast_ScreenMsg(
-				FString::Printf(TEXT("%s Cannot shoot after Advancing (weapon is not Assault)."),
-				DebugPrefix ? DebugPrefix : TEXT("[Shot]")),
-				FColor::Red, 3.f);
-		return Out;
-	}
+	// if (Ctx.bAttackerAdvanced && !bHasAssault)
+	// {
+	// 	if (AMatchGameState* S2 = GS())
+	// 		S2->Multicast_ScreenMsg(
+	// 			FString::Printf(TEXT("%s Cannot shoot after Advancing (weapon is not Assault)."),
+	// 			DebugPrefix ? DebugPrefix : TEXT("[Shot]")),
+	// 			FColor::Red, 3.f);
+	// 	return Out;
+	// }
 
 	// Heavy: +1 to hit if did not move
 	if (bHasHeavy && !Ctx.bAttackerMoved)
