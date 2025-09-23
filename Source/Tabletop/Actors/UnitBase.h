@@ -272,15 +272,22 @@ public:
     UFUNCTION(BlueprintCallable, Category="Facing")
     void VisualFaceYaw(float WorldYaw);
 
-    UPROPERTY() UNiagaraSystem* FX_Muzzle = nullptr;
-    UPROPERTY() UNiagaraSystem* FX_Impact = nullptr;
-    UPROPERTY() USoundBase* Snd_Muzzle = nullptr;
-    UPROPERTY() USoundBase* Snd_Impact = nullptr;
-    UPROPERTY() USoundBase* Snd_Selected = nullptr;   // NEW
-    UPROPERTY() USoundBase* Snd_UnderFire = nullptr;  // NEW
-    UPROPERTY() USoundAttenuation* SndAttenuation = nullptr;
-    UPROPERTY() USoundConcurrency* SndConcurrency = nullptr;
-    UPROPERTY() float ImpactDelaySeconds = 1.0f;
+    UPROPERTY(ReplicatedUsing=OnRep_VFXAudio) UNiagaraSystem* FX_Muzzle = nullptr;
+    UPROPERTY(ReplicatedUsing=OnRep_VFXAudio) UNiagaraSystem* FX_Impact = nullptr;
+
+    UPROPERTY(ReplicatedUsing=OnRep_VFXAudio) USoundBase*    Snd_Muzzle = nullptr;
+    UPROPERTY(ReplicatedUsing=OnRep_VFXAudio) USoundBase*    Snd_Impact = nullptr;
+    UPROPERTY(ReplicatedUsing=OnRep_VFXAudio) USoundBase*    Snd_Selected = nullptr;
+    UPROPERTY(ReplicatedUsing=OnRep_VFXAudio) USoundBase*    Snd_UnderFire = nullptr;
+
+    UPROPERTY(ReplicatedUsing=OnRep_VFXAudio) USoundAttenuation* SndAttenuation = nullptr;
+    UPROPERTY(ReplicatedUsing=OnRep_VFXAudio) USoundConcurrency* SndConcurrency  = nullptr;
+
+    UPROPERTY(ReplicatedUsing=OnRep_VFXAudio)
+    float ImpactDelaySeconds = 1.0f;
+
+    UFUNCTION()
+    void OnRep_VFXAudio();
 
     UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="VFX")
     FName MuzzleSocketName = "Muzzle";

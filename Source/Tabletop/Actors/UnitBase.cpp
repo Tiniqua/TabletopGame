@@ -580,6 +580,10 @@ int32 AUnitBase::FindBestShooterModelIndex(const FVector& TargetWorld) const
     return (BestIdx == INDEX_NONE) ? 0 : BestIdx;
 }
 
+void AUnitBase::OnRep_VFXAudio()
+{
+}
+
 void AUnitBase::PlayImpactFXAndSounds_Delayed(AUnitBase* TargetUnit)
 {
     if (!IsValid(TargetUnit)) return;
@@ -673,6 +677,12 @@ void AUnitBase::ApplyDamage_Server(int32 Damage)
     {
         ModelsCurrent = NewModels;
         RebuildFormation();
+    }
+
+    if (Snd_UnderFire)
+    {
+        UGameplayStatics::PlaySoundAtLocation(this, Snd_UnderFire, GetActorLocation(),
+            1.f, 1.f, 0.f, SndAttenuation, SndConcurrency);
     }
 
     if (WoundsPool <= 0)
@@ -1159,4 +1169,14 @@ void AUnitBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetim
     DOREPLIFETIME(AUnitBase, AbilityClassesRep);
     DOREPLIFETIME(AUnitBase, NextPhaseAPDebt);
     DOREPLIFETIME(AUnitBase, bOverwatchArmed);
+
+    DOREPLIFETIME_CONDITION(AUnitBase, FX_Muzzle,           COND_InitialOnly);
+    DOREPLIFETIME_CONDITION(AUnitBase, FX_Impact,           COND_InitialOnly);
+    DOREPLIFETIME_CONDITION(AUnitBase, Snd_Muzzle,          COND_InitialOnly);
+    DOREPLIFETIME_CONDITION(AUnitBase, Snd_Impact,          COND_InitialOnly);
+    DOREPLIFETIME_CONDITION(AUnitBase, Snd_Selected,        COND_InitialOnly);
+    DOREPLIFETIME_CONDITION(AUnitBase, Snd_UnderFire,       COND_InitialOnly);
+    DOREPLIFETIME_CONDITION(AUnitBase, SndAttenuation,           COND_InitialOnly);
+    DOREPLIFETIME_CONDITION(AUnitBase, SndConcurrency,            COND_InitialOnly);
+    DOREPLIFETIME_CONDITION(AUnitBase, ImpactDelaySeconds,  COND_InitialOnly);
 }
