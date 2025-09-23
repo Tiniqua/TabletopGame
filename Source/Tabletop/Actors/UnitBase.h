@@ -70,6 +70,9 @@ public:
     UPROPERTY(EditDefaultsOnly, Category="RangeViz|Material")
     UMaterialInterface* RangeDecalMaterial = nullptr;
 
+    UFUNCTION()
+    void OnRep_OwningPS();
+
     UPROPERTY()
     UMaterialInstanceDynamic* RangeMID = nullptr;
 
@@ -91,6 +94,50 @@ public:
 
     UFUNCTION(BlueprintCallable, Category="RangeViz")
     void HideRangePreview();
+
+    // ----- Overwatch viz -----
+    UPROPERTY(VisibleAnywhere, Category="OverwatchViz")
+    UDecalComponent* OverwatchDecal = nullptr;
+
+    UPROPERTY(EditDefaultsOnly, Category="OverwatchViz|Material")
+    UMaterialInterface* OverwatchDecalMaterial = nullptr;
+
+    UPROPERTY()
+    UMaterialInstanceDynamic* OverwatchMID = nullptr;
+
+    // Slightly different z-thickness/height to avoid z-fight with RangeDecal
+    UPROPERTY(EditDefaultsOnly, Category="OverwatchViz|Material", meta=(ClampMin="1.0"))
+    float OverwatchDecalThickness = 120.f;
+
+    UPROPERTY(EditDefaultsOnly, Category="OverwatchViz|Material")
+    FLinearColor OverwatchColor = FLinearColor(1.0f, 0.65f, 0.10f, 0.55f); // amber-ish
+
+    // 0 = use current weapon range; otherwise override in inches
+    UPROPERTY(EditDefaultsOnly, Category="OverwatchViz")
+    int32 OverwatchRangeOverrideInches = 0;
+
+    // Should enemies see the ring? Usually no—owner/team only.
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, ReplicatedUsing=OnRep_OWVisToEnemies, Category="Overwatch")
+    bool bOverwatchVisibleToEnemies = true;
+
+    // Make the armed flag drive the ring via OnRep
+    UPROPERTY(ReplicatedUsing=OnRep_OverwatchArmed, BlueprintReadOnly)
+    bool bOverwatchArmed = false;
+
+    UFUNCTION()
+    void OnRep_OverwatchArmed();
+
+    UFUNCTION()
+    void OnRep_OWVisToEnemies();
+
+    // Helpers
+    void EnsureOverwatchDecal();
+    void UpdateOverwatchIndicatorLocal(bool bForceHide = false);
+    float GetOverwatchRangeCm() const;
+
+    // Server helper to toggle state
+    UFUNCTION(BlueprintCallable, Category="Overwatch")
+    void SetOverwatchArmed(bool bArmed);
 
     // ---------- Abilities ----------
 
@@ -144,7 +191,8 @@ public:
     // ---------- Identity / ownership (replicated) ----------
     UPROPERTY(Replicated) FName UnitId = NAME_None;
     UPROPERTY(Replicated) EFaction Faction = EFaction::None;
-    UPROPERTY(Replicated) APlayerState* OwningPS = nullptr;
+    UPROPERTY(ReplicatedUsing=OnRep_OwningPS)
+    APlayerState* OwningPS = nullptr;
     
     // Chosen weapon index within the row (server sets, clients read)
     UPROPERTY(Replicated) int32 WeaponIndex = 0;
@@ -198,9 +246,6 @@ public:
 
     UPROPERTY(Replicated, BlueprintReadOnly, Category="Stats|Defense")
     int32 FeelNoPainRep = 7;
-
-    UPROPERTY(Replicated, BlueprintReadOnly)
-    bool bOverwatchArmed = false;
     
     UFUNCTION(BlueprintPure) int32 GetInvuln() const { return InvulnerableSaveRep; }
     UFUNCTION(BlueprintPure) int32 GetFeelNoPain() const { return FeelNoPainRep; }

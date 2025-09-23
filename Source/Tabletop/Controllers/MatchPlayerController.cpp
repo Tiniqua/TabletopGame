@@ -347,6 +347,13 @@ void AMatchPlayerController::Client_OnAdvanced_Implementation(AUnitBase* Unit, i
 	Unit->RefreshRangeIfActive();  // safety net to refresh the decal if it’s already visible
 }
 
+void AMatchPlayerController::Client_OnOverwatchArmed_Implementation(AUnitBase* Unit)
+{
+	if (!IsValid(Unit)) return;
+	Unit->HideRangePreview();             // drop Shoot/Move ring
+	Unit->UpdateOverwatchIndicatorLocal(); // show OW ring (armed)
+}
+
 void AMatchPlayerController::Server_SetGlobalSelectedUnit_Implementation(AUnitBase* NewSel)
 {
 	if (AMatchGameState* S = GS())

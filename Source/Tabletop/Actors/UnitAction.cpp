@@ -5,6 +5,7 @@
 #include "Tabletop/CombatEffects.h"
 #include "Tabletop/AbiltyEventSubsystem.h"            // (spelling matches your project)
 #include "Tabletop/UnitActionResourceComponent.h"
+#include "Tabletop/Controllers/MatchPlayerController.h"
 #include "Tabletop/Gamemodes/MatchGameMode.h"
 
 // ====================== UUnitAction (base) ======================
@@ -221,18 +222,27 @@ bool UAction_Overwatch::CanExecute_Implementation(AUnitBase* Unit, const FAction
 
 void UAction_Overwatch::Execute_Implementation(AUnitBase* Unit, const FActionRuntimeArgs& Args)
 {
-	if (!Unit) return;
-	if (!PayAP(Unit)) return;
-
 	if (Unit->HasAuthority())
 	{
-		Unit->bOverwatchArmed = true;   // arm it
+		Unit->bOverwatchVisibleToEnemies = true;  // telegraph to enemies
+		Unit->SetOverwatchArmed(true);
 		Unit->BumpUsage(Desc);
 		Unit->ForceNetUpdate();
 
+		// 1) hide host’s local range ring immediately (listen server)
+		Unit->HideRangePreview();
+
+		// 2) and do the same on the owning client
+		if (AMatchPlayerController* PC = Args.InstigatorPC)
+		{
+			PC->Client_OnOverwatchArmed(Unit);
+		}
+
 		if (AMatchGameState* S = Unit->GetWorld()->GetGameState<AMatchGameState>())
 		{
-			S->Multicast_ScreenMsg(FString::Printf(TEXT("%s is on Overwatch."), *Unit->GetName()), FColor::Cyan, 2.0f);
+			S->Multicast_ScreenMsg(
+				FString::Printf(TEXT("%s is on Overwatch."), *Unit->GetName()),
+				FColor::Cyan, 2.0f);
 		}
 	}
 }
@@ -254,8 +264,7 @@ void UAction_Overwatch::OnAnyEvent(const FAbilityEventContext& Ctx)
 		if (GM->ValidateShoot(Watcher, Mover))
 		{
 			GM->Handle_OverwatchShot(Watcher, Mover);  // authority resolves
-			Watcher->bOverwatchArmed = false;          // consume
-			Watcher->ForceNetUpdate();
+			Watcher->SetOverwatchArmed(false);
 		}
 	}
 }

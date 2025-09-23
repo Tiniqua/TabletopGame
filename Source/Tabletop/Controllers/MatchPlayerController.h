@@ -53,6 +53,9 @@ public:
 	UFUNCTION(Client, Reliable)
 	void Client_OnAdvanced(AUnitBase* Unit, int32 BonusInches);
 
+	UFUNCTION(Client, Reliable)
+	void Client_OnOverwatchArmed(class AUnitBase* Unit);
+
 	UFUNCTION(Server, Reliable)
 	void Server_SetGlobalSelectedUnit(AUnitBase* NewSel);
 

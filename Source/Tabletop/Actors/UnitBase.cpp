@@ -52,6 +52,17 @@ AUnitBase::AUnitBase()
     RangeProbe->SetCollisionEnabled(ECollisionEnabled::NoCollision);
     RangeProbe->SetVisibility(false);
     RangeProbe->SetHiddenInGame(true);
+
+    OverwatchDecal = CreateDefaultSubobject<UDecalComponent>(TEXT("OverwatchDecal"));
+    OverwatchDecal->SetupAttachment(RootComponent);
+    OverwatchDecal->SetRelativeRotation(FRotator(-90.f, 0.f, 0.f)); // project down
+    OverwatchDecal->DecalSize = FVector(OverwatchDecalThickness, 50.f, 50.f);
+    OverwatchDecal->SetVisibility(false);
+    OverwatchDecal->SetHiddenInGame(true);
+    OverwatchDecal->SetFadeScreenSize(0.f);
+
+    // Position a tad above/below the other ring to avoid z-fighting
+    OverwatchDecal->SetRelativeLocation(FVector(0.f, 0.f, 7.f)); // RangeDecal used 5.f
 }
 
 void AUnitBase::BeginPlay()
@@ -59,11 +70,13 @@ void AUnitBase::BeginPlay()
     Super::BeginPlay();
     EnsureRuntimeBuilt();
     EnsureRangeDecal();
+    EnsureOverwatchDecal();
 
     if (HasAuthority())
     {
         RebuildFormation();
     }
+    UpdateOverwatchIndicatorLocal();
 }
 
 void AUnitBase::EnsureRangeDecal()
@@ -81,6 +94,116 @@ void AUnitBase::EnsureRangeDecal()
             // Color comes per-context; we set it when showing
         }
     }
+}
+
+void AUnitBase::EnsureOverwatchDecal()
+{
+    if (!OverwatchDecal) return;
+
+    if (OverwatchDecalMaterial && !OverwatchMID)
+    {
+        OverwatchMID = UMaterialInstanceDynamic::Create(OverwatchDecalMaterial, this);
+        OverwatchDecal->SetDecalMaterial(OverwatchMID);
+        if (OverwatchMID && OverwatchMID->IsValidLowLevel())
+        {
+            // match your RangeDecal param names if shared material
+            OverwatchMID->SetVectorParameterValue(TEXT("TintColor"), OverwatchColor);
+            OverwatchMID->SetScalarParameterValue(TEXT("RingSoftness"), RingSoftness);
+        }
+    }
+}
+
+float AUnitBase::GetOverwatchRangeCm() const
+{
+    int32 inches = OverwatchRangeOverrideInches > 0
+                 ? OverwatchRangeOverrideInches
+                 : FMath::Max(0, GetActiveWeaponProfile().RangeInches);
+    return float(inches) * GetCmPerTTInch_Safe();
+}
+
+void AUnitBase::OnRep_OwningPS()
+{
+    UpdateOverwatchIndicatorLocal(); // re-check team/owner vis
+}
+
+void AUnitBase::UpdateOverwatchIndicatorLocal(bool bForceHide)
+{
+    EnsureOverwatchDecal();
+    if (!OverwatchDecal) return;
+
+    // Hide if forced or not armed
+    if (bForceHide || !bOverwatchArmed)
+    {
+        OverwatchDecal->SetVisibility(false);
+        OverwatchDecal->SetHiddenInGame(true);
+        return;
+    }
+
+    // Visibility policy: owner/team only (unless you want to telegraph to enemies)
+    bool bShow = true;
+    if (!bOverwatchVisibleToEnemies)
+    {
+        const APlayerController* LPC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr;
+        const APlayerState* LPS = LPC ? LPC->PlayerState : nullptr;
+
+        if (const auto* MyTPS = Cast<ATabletopPlayerState>(LPS))
+        if (const auto* OwnTPS = Cast<ATabletopPlayerState>(OwningPS))
+        {
+            const bool sameTeam = (MyTPS->TeamNum > 0 && OwnTPS->TeamNum > 0 && MyTPS->TeamNum == OwnTPS->TeamNum);
+            const bool isOwner  = (LPS == OwningPS);
+            bShow = (sameTeam || isOwner);
+        }
+    }
+
+    if (!bShow)
+    {
+        OverwatchDecal->SetVisibility(false);
+        OverwatchDecal->SetHiddenInGame(true);
+        return;
+    }
+
+    const float rCm = GetOverwatchRangeCm();
+    if (rCm <= KINDA_SMALL_NUMBER)
+    {
+        OverwatchDecal->SetVisibility(false);
+        OverwatchDecal->SetHiddenInGame(true);
+        return;
+    }
+
+    // Size decal: X thickness, Y/Z = radius (matches your rotated -90° setup)
+    OverwatchDecal->DecalSize = FVector(OverwatchDecalThickness, rCm, rCm);
+
+    if (OverwatchMID)
+    {
+        OverwatchMID->SetVectorParameterValue(TEXT("TintColor"), OverwatchColor);
+        OverwatchMID->SetScalarParameterValue(TEXT("RadiusCm"), rCm);
+    }
+
+    OverwatchDecal->SetVisibility(true);
+    OverwatchDecal->SetHiddenInGame(false);
+    OverwatchDecal->MarkRenderStateDirty();
+}
+
+void AUnitBase::OnRep_OverwatchArmed()
+{
+    UpdateOverwatchIndicatorLocal();
+}
+
+void AUnitBase::OnRep_OWVisToEnemies()
+{
+    UpdateOverwatchIndicatorLocal();
+}
+
+void AUnitBase::SetOverwatchArmed(bool bArmed)
+{
+    if (!HasAuthority()) return;
+    if (bOverwatchArmed == bArmed) return;
+
+    bOverwatchArmed = bArmed;
+    ForceNetUpdate();
+
+    // Listen server immediate refresh
+    UpdateOverwatchIndicatorLocal();
 }
 
 float AUnitBase::GetCmPerTTInch_Safe() const
@@ -141,6 +264,8 @@ void AUnitBase::SetRangeVisible(float RadiusCm, const FLinearColor& Color, ERang
     // Optionally: RangeDecal->RecreateRenderState_Concurrent(); (heavier)
 
     CurrentRangeMode = Mode;
+
+    UpdateOverwatchIndicatorLocal(/*bForceHide=*/ CurrentRangeMode != ERangeVizMode::None);
 }
 
 void AUnitBase::HideRangePreview()
@@ -151,6 +276,7 @@ void AUnitBase::HideRangePreview()
         RangeDecal->SetHiddenInGame(true);
     }
     CurrentRangeMode = ERangeVizMode::None;
+    UpdateOverwatchIndicatorLocal(/*bForceHide=*/ CurrentRangeMode != ERangeVizMode::None);
 }
 
 void AUnitBase::UpdateRangePreview(bool bAsTargetContext)
@@ -865,6 +991,7 @@ void AUnitBase::OnRep_CurrentWeapon()
     SyncWeaponSnapshotsFromCurrent();
     RebuildRuntimeActions();
     RefreshRangeIfActive();
+    UpdateOverwatchIndicatorLocal();
 }
 
 void AUnitBase::NotifyMoveChanged()
@@ -1179,6 +1306,7 @@ void AUnitBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetim
     DOREPLIFETIME(AUnitBase, AbilityClassesRep);
     DOREPLIFETIME(AUnitBase, NextPhaseAPDebt);
     DOREPLIFETIME(AUnitBase, bOverwatchArmed);
+    DOREPLIFETIME(AUnitBase, bOverwatchVisibleToEnemies);
 
     DOREPLIFETIME_CONDITION(AUnitBase, FX_Muzzle,           COND_InitialOnly);
     DOREPLIFETIME_CONDITION(AUnitBase, FX_Impact,           COND_InitialOnly);
