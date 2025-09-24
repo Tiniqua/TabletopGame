@@ -35,6 +35,12 @@ public:
 
 	UPROPERTY(Transient)
 	bool bPresetInitialized = false;
+
+	UPROPERTY(Transient)
+	bool bInitialized = false;
+
+	UPROPERTY(Transient)
+	float PendingHealth = -1.f;
 	
 	// --- Config / State ---
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Cover|Preset")

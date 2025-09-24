@@ -257,35 +257,34 @@ void ACoverVolume::SetHealthPercentImmediate(float Pct)
 	}
 }
 
-void ACoverVolume::ApplyPresetMeshes(UStaticMesh* InHighMesh, UStaticMesh* InLowMesh, UStaticMesh* InNoneMesh)
+void ACoverVolume::ApplyPresetMeshes(UStaticMesh* InHigh, UStaticMesh* InLow, UStaticMesh* InNone)
 {
-	HighMesh = InHighMesh;
-	LowMesh  = InLowMesh;
-	NoneMesh = InNoneMesh;
+	HighMesh = InHigh;
+	LowMesh  = InLow;
+	NoneMesh = InNone;
 
 	bPresetInitialized = true;
+	bInitialized = true;
 
-	// If the multicast hit before registration, make sure components are registered now.
 	if (!HaveValidComponents())
 	{
 		if (Visual && !Visual->IsRegistered()) Visual->RegisterComponent();
 		if (Box    && !Box->IsRegistered())    Box->RegisterComponent();
 	}
 
-	RecomputeFromHealth();
-
-	UE_LOG(LogCoverNet, Log, TEXT("[CV %s] ApplyPresetMeshes High=%s Low=%s None=%s Thr=%.2f"),
-			*GetName(),
-			HighMesh? *HighMesh->GetName():TEXT("null"),
-			LowMesh ? *LowMesh ->GetName():TEXT("null"),
-			NoneMesh?*NoneMesh->GetName():TEXT("null"),
-			HighToLowPct);
-
-	if (HasAuthority() && IsGameWorld())
+	// If Health arrived first, apply it now
+	if (PendingHealth >= 0.f)
 	{
-		ForceNetUpdate();
+		Health = FMath::Clamp(PendingHealth, 0.f, MaxHealth);
+		PendingHealth = -1.f;
 	}
+
+	RecomputeFromHealth();
+	UE_LOG(LogCoverNet, Log, TEXT("[CV %s] ApplyPresetMeshes ..."), *GetName());
+
+	if (HasAuthority() && IsGameWorld()) { ForceNetUpdate(); }
 }
+
 
 void ACoverVolume::ApplyCoverDamage(float Incoming)
 {
@@ -310,6 +309,11 @@ void ACoverVolume::ApplyCoverDamage(float Incoming)
 
 void ACoverVolume::OnRep_Health()
 {
+	if (!bInitialized)
+	{
+		PendingHealth = Health;
+		return;
+	}
 	RecomputeFromHealth();
 }
 

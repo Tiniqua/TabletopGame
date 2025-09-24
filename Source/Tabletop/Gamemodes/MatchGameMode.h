@@ -7,6 +7,7 @@
 #include "GameFramework/GameStateBase.h"
 #include "Net/UnrealNetwork.h"
 #include "Tabletop/AbiltyEventSubsystem.h"
+#include "Tabletop/ArmyData.h"
 #include "Tabletop/Actors/CoverVolume.h"
 #include "Tabletop/Actors/UnitAction.h"
 
@@ -35,14 +36,55 @@ struct FCoverRowAssignment
 	GENERATED_BODY()
 
 	UPROPERTY() TWeakObjectPtr<ACoverVolume> Volume;
+
+	// Keep RowName if useful for debug, but we won't *need* it on clients anymore
 	UPROPERTY() FName RowName;
+
 	UPROPERTY() uint8 bPreferLow : 1;
 
-	// Resolved on the server once, replicated so all machines stay in lockstep
+	// Fully resolved on the server, replicated to clients:
+	UPROPERTY() UStaticMesh* HighMesh = nullptr;
+	UPROPERTY() UStaticMesh* LowMesh  = nullptr;
+	UPROPERTY() UStaticMesh* NoneMesh = nullptr;
+
 	UPROPERTY() float StartPct     = 1.f;
 	UPROPERTY() float ThresholdPct = 0.5f;
 };
 
+USTRUCT(BlueprintType)
+struct FCoverPresetRow : public FTableRowBase
+{
+	GENERATED_BODY()
+
+	/** Which faction this preset is for */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly)
+	EFaction Faction = EFaction::None;
+
+	/** High / Low / None meshes used by ACoverVolume */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly)
+	UStaticMesh* HighCoverMesh = nullptr;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly)
+	UStaticMesh* LowCoverMesh  = nullptr;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly)
+	UStaticMesh* NoCoverMesh   = nullptr;
+
+	/**
+	 * Health fraction threshold where High → Low (0..1).
+	 * Example: 0.65 means at 65% health and above it's High, below it's Low.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta=(ClampMin="0.0", ClampMax="1.0"))
+	float HighToLowPct = 0.65f;
+
+	/**
+	 * Starting health fraction (0..1). Usually 1.0, but can theme maps to start damaged.
+	 * NOTE: If a volume has bPreferLowCover=true, the code will override this to just
+	 * below HighToLowPct so it starts in Low without removing the High mesh.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta=(ClampMin="0.0", ClampMax="1.0"))
+	float StartHealthPct = 1.0f;
+};
 
 FORCEINLINE uint32 GetTypeHash(const FCoverPairKey& K)
 {
@@ -87,8 +129,6 @@ struct FMatchSummary
 	UPROPERTY(BlueprintReadOnly) TArray<FSurvivorEntry> Survivors;
 	UPROPERTY(BlueprintReadOnly) int32 RoundsPlayed = 0;
 };
-
-enum class EFaction : uint8;
 
 UENUM(BlueprintType)
 enum class EMatchPhase : uint8

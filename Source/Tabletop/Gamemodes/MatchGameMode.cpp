@@ -183,63 +183,46 @@ static void GatherZonesByTeam(UWorld* W, TArray<ADeploymentZone*>& OutTeam1, TAr
     }
 }
 
-static FName PickRowNameForFaction(const UDataTable* DT, EFaction Faction, bool bPreferLow)
+static FName PickRowForFaction(const UDataTable* DT, EFaction Faction, bool bPreferLow)
 {
 	if (!DT || Faction == EFaction::None) return NAME_None;
 
 	TArray<FName> Both, LowOnly;
+
+	// Iterate row names, fetch typed row via FindRow (safe on all versions)
 	for (const auto& Pair : DT->GetRowMap())
 	{
-		const FCoverPresetRow* R = reinterpret_cast<const FCoverPresetRow*>(Pair.Value);
+		const FName RowName = Pair.Key;
+
+		const FCoverPresetRow* R = DT->FindRow<FCoverPresetRow>(RowName, TEXT("PickRowForFaction"));
 		if (!R || R->Faction != Faction) continue;
 
 		const bool bH = (R->HighCoverMesh != nullptr);
 		const bool bL = (R->LowCoverMesh  != nullptr);
-		if ( bL &&  bH) Both.Add(Pair.Key);
-		if ( bL && !bH) LowOnly.Add(Pair.Key);
+
+		if ( bL &&  bH) Both.Add(RowName);
+		if ( bL && !bH) LowOnly.Add(RowName);
+
+		// (Optional) collect HighOnly if you want a third fallback bucket:
+		// if ( bH && !bL) HighOnly.Add(RowName);
 	}
+
+	auto RandFrom = [](const TArray<FName>& Arr)->FName
+	{
+		return Arr.Num() ? Arr[FMath::RandRange(0, Arr.Num()-1)] : NAME_None;
+	};
 
 	if (bPreferLow)
 	{
-		if (LowOnly.Num()) return LowOnly[FMath::RandRange(0, LowOnly.Num()-1)];
-		if (Both.Num())    return Both   [FMath::RandRange(0, Both   .Num()-1)];
+		if (FName N = RandFrom(LowOnly); N != NAME_None) return N;
+		if (FName N = RandFrom(Both);    N != NAME_None) return N;
 	}
 	else
 	{
-		if (Both.Num())    return Both   [FMath::RandRange(0, Both   .Num()-1)];
-		if (LowOnly.Num()) return LowOnly[FMath::RandRange(0, LowOnly.Num()-1)];
+		if (FName N = RandFrom(Both);    N != NAME_None) return N;
+		if (FName N = RandFrom(LowOnly); N != NAME_None) return N;
 	}
 	return NAME_None;
-}
-
-static const FCoverPresetRow* PickRowForFaction(
-	const UDataTable* DT, EFaction Faction, bool bPreferLow)
-{
-	if (!DT || Faction == EFaction::None) return nullptr;
-
-	TArray<const FCoverPresetRow*> Both, LowOnly;
-	for (const auto& Pair : DT->GetRowMap())
-	{
-		const FCoverPresetRow* R = reinterpret_cast<const FCoverPresetRow*>(Pair.Value);
-		if (!R || R->Faction != Faction) continue;
-
-		const bool bH = (R->HighCoverMesh != nullptr);
-		const bool bL = (R->LowCoverMesh  != nullptr);
-		if ( bL &&  bH) Both.Add(R);
-		if ( bL && !bH) LowOnly.Add(R);
-	}
-
-	if (bPreferLow)
-	{
-		if (LowOnly.Num()) return LowOnly[FMath::RandRange(0, LowOnly.Num()-1)];
-		if (Both.Num())    return Both   [FMath::RandRange(0, Both   .Num()-1)];
-	}
-	else
-	{
-		if (Both.Num())    return Both   [FMath::RandRange(0, Both   .Num()-1)];
-		if (LowOnly.Num()) return LowOnly[FMath::RandRange(0, LowOnly.Num()-1)];
-	}
-	return nullptr;
 }
 
 UAbilityEventSubsystem* AMatchGameMode::AbilityBus(UWorld* W)
@@ -479,23 +462,15 @@ void AMatchGameState::ReapplyAllCoverAssignments()
 
 void AMatchGameState::ApplyCoverAssignment(const FCoverRowAssignment& A)
 {
-	if (!CoverPresetsTable) return;
 	ACoverVolume* CV = A.Volume.Get();
 	if (!IsValid(CV)) return;
 
-	const FCoverPresetRow* Row = CoverPresetsTable->FindRow<FCoverPresetRow>(A.RowName, TEXT("ApplyCoverAssignment"));
-	if (!Row) return;
-
-	UStaticMesh* High = Row->HighCoverMesh;
-	UStaticMesh* Low  = Row->LowCoverMesh;
-	UStaticMesh* None = Row->NoCoverMesh;
-
-	// Enforce “prefer low” policy exactly as on the server
-	if (A.bPreferLow && High && Low) High = nullptr;
-
 	CV->HighToLowPct = FMath::Clamp(A.ThresholdPct, 0.f, 1.f);
-	CV->ApplyPresetMeshes(High, Low, None);
+	CV->ApplyPresetMeshes(A.HighMesh, A.LowMesh, A.NoneMesh);
 	CV->SetHealthPercentImmediate(FMath::Clamp(A.StartPct, 0.f, 1.f));
+
+	// (Server) not strictly needed, but harmless
+	if (HasAuthority()) { CV->ForceNetUpdate(); }
 }
 
 void AMatchGameState::Multicast_DrawShotDebug_Implementation(const FVector& WorldLoc, const FString& Msg, FColor Color, float Duration)
@@ -2529,82 +2504,82 @@ void AMatchGameMode::FinalizePlayerJoin(APlayerController* PC)
 
 void AMatchGameMode::ApplyCoverPresetsFromTableOnce()
 {
-    if (!HasAuthority()) return;
+	if (!HasAuthority()) return;
 
-    UWorld* W = GetWorld();
-    AMatchGameState* GS = GetGameState<AMatchGameState>();
-    if (!W || !GS || !CoverPresetsTable)
-    {
-        UE_LOG(LogCoverNet, Warning, TEXT("[GM] Missing world/state/table, skipping cover preset apply."));
-        return;
-    }
+	UWorld* W = GetWorld();
+	AMatchGameState* GS = GetGameState<AMatchGameState>();
+	if (!W || !GS || !CoverPresetsTable)
+	{
+		UE_LOG(LogCoverNet, Warning, TEXT("[GM] Missing world/state/table, skipping cover preset apply."));
+		return;
+	}
 
-    // Make sure the DT pointer actually replicates
-    GS->CoverPresetsTable = CoverPresetsTable;
+	GS->CoverPresetsTable = CoverPresetsTable; // debug/visibility
 
-    // Find covers (TActorIterator is fine; your CollectCoverVolumes_AllLevels also works)
-    TArray<ACoverVolume*> Covers;
-    for (TActorIterator<ACoverVolume> It(W); It; ++It) if (*It) Covers.Add(*It);
+	TArray<ACoverVolume*> Covers;
+	for (TActorIterator<ACoverVolume> It(W); It; ++It) if (*It) Covers.Add(*It);
+	if (Covers.Num() == 0)
+	{
+		UE_LOG(LogCoverNet, Warning, TEXT("[GM] No ACoverVolume found; will try again when levels stream in."));
+		return;
+	}
 
-    if (Covers.Num() == 0)
-    {
-        UE_LOG(LogCoverNet, Warning, TEXT("[GM] No ACoverVolume found; will try again when levels stream in."));
-        return;
-    }
+	const EFaction F1 = GS->P1 ? GS->P1->SelectedFaction : EFaction::None;
+	const EFaction F2 = GS->P2 ? GS->P2->SelectedFaction : EFaction::None;
 
-    const EFaction F1 = GS->P1 ? GS->P1->SelectedFaction : EFaction::None;
-    const EFaction F2 = GS->P2 ? GS->P2->SelectedFaction : EFaction::None;
+	auto FactionForVolume = [&](ACoverVolume* CV)->EFaction
+	{
+		// TODO: replace with real nearest-deployment logic
+		return (GetTypeHash(CV) & 1) ? F1 : F2;
+	};
 
-    auto FactionForVolume = [&](ACoverVolume* CV)->EFaction
-    {
-        // TODO: replace with your real mapping (zone/team). Hash trick kept for parity with your code.
-        return (GetTypeHash(CV) & 1) ? F1 : F2;
-    };
+	GS->CoverAssignments.Reset(Covers.Num());
+	int32 Applied = 0;
 
-    GS->CoverAssignments.Reset(Covers.Num());
+	for (ACoverVolume* CV : Covers)
+	{
+		if (!CV) continue;
 
-    int32 Applied = 0;
-    for (ACoverVolume* CV : Covers)
-    {
-        if (!CV) continue;
+		const EFaction Fac = FactionForVolume(CV);
+		const bool bPreferLow = CV->bPreferLowCover;
 
-        const EFaction Fac = FactionForVolume(CV);
-        const bool bPreferLow = CV->bPreferLowCover;
+		const FName RowName = PickRowForFaction(CoverPresetsTable, Fac, bPreferLow);
+		if (RowName.IsNone())
+		{
+			UE_LOG(LogCoverNet, Warning, TEXT("[GM] No preset row for CV=%s Fac=%d PreferLow=%d"),
+				*GetNameSafe(CV), (int32)Fac, bPreferLow?1:0);
+			continue;
+		}
 
-        const FName RowName = PickRowNameForFaction(CoverPresetsTable, Fac, bPreferLow);
-        if (RowName.IsNone())
-        {
-            UE_LOG(LogCoverNet, Warning, TEXT("[GM] No preset row for CV=%s Fac=%d PreferLow=%d"),
-                *GetNameSafe(CV), (int32)Fac, bPreferLow?1:0);
-            continue;
-        }
+		const FCoverPresetRow* Row =
+			CoverPresetsTable->FindRow<FCoverPresetRow>(RowName, TEXT("ApplyCoverPresetsFromTableOnce"));
+		if (!Row) continue;
 
-        const FCoverPresetRow* Row = CoverPresetsTable->FindRow<FCoverPresetRow>(RowName, TEXT("ApplyCoverPresetsFromTableOnce"));
-        if (!Row)
-            continue;
+		const float Thr = FMath::Clamp(Row->HighToLowPct, 0.f, 1.f);
+		const float Eps = 0.005f;
+		const float StartPct = (bPreferLow && Row->LowCoverMesh)
+			? FMath::Clamp(Thr - Eps, 0.f, 1.f)
+			: FMath::Clamp(Row->StartHealthPct, 0.f, 1.f);
 
-        const float Thr = FMath::Clamp(Row->HighToLowPct, 0.f, 1.f);
-        const float Eps = 0.005f;
-        const float StartPct = (bPreferLow && Row->LowCoverMesh)
-                             ? FMath::Clamp(Thr - Eps, 0.f, 1.f)
-                             : FMath::Clamp(Row->StartHealthPct, 0.f, 1.f);
+		FCoverRowAssignment A;
+		A.Volume       = CV;
+		A.RowName      = RowName;           // optional debug
+		A.bPreferLow   = bPreferLow ? 1 : 0;
+		A.HighMesh     = Row->HighCoverMesh;
+		A.LowMesh      = Row->LowCoverMesh;
+		A.NoneMesh     = Row->NoCoverMesh;
+		A.StartPct     = StartPct;
+		A.ThresholdPct = Thr;
 
-        FCoverRowAssignment A;
-        A.Volume      = CV;
-        A.RowName     = RowName;
-        A.bPreferLow  = bPreferLow ? 1 : 0;
-        A.StartPct    = StartPct;
-        A.ThresholdPct= Thr;
+		GS->CoverAssignments.Add(A);
+		++Applied;
+	}
 
-        GS->CoverAssignments.Add(A);
-        ++Applied;
-    }
+	// Apply locally (server) and replicate (clients use OnRep to apply)
+	GS->OnRep_CoverAssignments();
+	GS->ForceNetUpdate();
 
-    // Apply immediately on the server (listen host), and replicate to clients
-    GS->OnRep_CoverAssignments();
-    GS->ForceNetUpdate();
-
-    UE_LOG(LogCoverNet, Display, TEXT("[GM] Cover presets assigned to %d volumes."), Applied);
+	UE_LOG(LogCoverNet, Display, TEXT("[GM] Cover presets assigned to %d volumes."), Applied);
 }
 
 void AMatchGameMode::TallyObjectives_EndOfRound()

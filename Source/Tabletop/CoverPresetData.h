@@ -5,14 +5,23 @@
 #include "ArmyData.h"            // for EFaction
 #include "CoverPresetData.generated.h"
 
-USTRUCT(BlueprintType)
-struct FCoverPresetRow : public FTableRowBase
+USTRUCT()
+struct FCoverPresetRep
 {
 	GENERATED_BODY()
-	UPROPERTY(EditAnywhere, BlueprintReadOnly) EFaction     Faction = EFaction::None;
-	UPROPERTY(EditAnywhere, BlueprintReadOnly) UStaticMesh* HighCoverMesh = nullptr;
-	UPROPERTY(EditAnywhere, BlueprintReadOnly) UStaticMesh* LowCoverMesh  = nullptr;
-	UPROPERTY(EditAnywhere, BlueprintReadOnly) UStaticMesh* NoCoverMesh   = nullptr;
-	UPROPERTY(EditAnywhere, BlueprintReadOnly) float        HighToLowPct   = 0.65f;
-	UPROPERTY(EditAnywhere, BlueprintReadOnly) float        StartHealthPct = 1.0f;
+
+	UPROPERTY() UStaticMesh* High = nullptr;
+	UPROPERTY() UStaticMesh* Low  = nullptr;
+	UPROPERTY() UStaticMesh* None = nullptr;
+
+	// Threshold + starting health percent are part of the preset decision:
+	UPROPERTY() float HighToLowPct   = 0.65f;
+	UPROPERTY() float StartHealthPct = 1.0f;
+
+	// Optional: if you still want “prefer low” knobs,
+	// keep them inside the struct so they are applied once.
+	UPROPERTY() bool bPreferLowCover = false;
+
+	// Simple validity check
+	bool IsValid() const { return High || Low || None; }
 };
