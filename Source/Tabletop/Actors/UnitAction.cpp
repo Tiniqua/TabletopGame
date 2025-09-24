@@ -8,6 +8,46 @@
 #include "Tabletop/Controllers/MatchPlayerController.h"
 #include "Tabletop/Gamemodes/MatchGameMode.h"
 
+// HELPERS
+
+static float CmPerInch(const UWorld* W)
+{
+	if (!W) return 2.54f * 20.f; // fallback if GM missing (matches your scale usage)
+	if (const AMatchGameMode* GM = W->GetAuthGameMode<AMatchGameMode>())
+		return GM->CmPerTabletopInch();
+	return 2.54f * 20.f;
+}
+
+static bool IsHealable(const AUnitBase* U)
+{
+	if (!U) return false;
+	const int32 perModel = FMath::Max(1, U->GetWoundsPerModel());
+	const int32 maxPool  = FMath::Max(0, U->ModelsMax * perModel);
+	return U->WoundsPool < maxPool;
+}
+
+static void GatherFriendliesWithin(AUnitBase* U, float RangeInches, bool bIncludeSelf, TArray<AUnitBase*>& Out)
+{
+	Out.Reset();
+	if (!U) return;
+	UWorld* World = U->GetWorld(); if (!World) return;
+
+	const float Rcm = RangeInches * CmPerInch(World);
+	const float R2  = Rcm * Rcm;
+	const FVector MyLoc = U->GetActorLocation();
+
+	for (TActorIterator<AUnitBase> It(World); It; ++It)
+	{
+		AUnitBase* Other = *It;
+		if (!Other) continue;
+		if (!bIncludeSelf && Other == U) continue;
+		if (Other->OwningPS != U->OwningPS) continue;
+
+		const bool bInRange = FVector::DistSquared(MyLoc, Other->GetActorLocation()) <= R2;
+		if (bInRange) Out.Add(Other);
+	}
+}
+
 // ====================== UUnitAction (base) ======================
 
 bool UUnitAction::CanExecute_Implementation(AUnitBase* Unit, const FActionRuntimeArgs& /*Args*/) const
@@ -42,6 +82,11 @@ void UUnitAction::BeginPreview_Implementation(AUnitBase* /*Unit*/)
 void UUnitAction::EndPreview_Implementation(AUnitBase* /*Unit*/)
 {
 	// default no-op
+}
+
+void UUnitAction::Setup(AUnitBase* Unit)
+{
+	OwnerUnit = Unit;
 }
 
 
@@ -251,7 +296,7 @@ void UAction_Overwatch::OnAnyEvent(const FAbilityEventContext& Ctx)
 {
 	if (Ctx.Event != ECombatEvent::Unit_Moved) return;
 
-	AUnitBase* Watcher = OwnerUnit.Get();
+	AUnitBase* Watcher = OwnerUnit;
 	AUnitBase* Mover   = Ctx.Source;
 	if (!Watcher || !Mover || Watcher == Mover) return;
 	if (!Watcher->HasAuthority()) return;              // only server reacts
@@ -409,23 +454,13 @@ void UAction_Medpack::Execute_Implementation(AUnitBase* U, const FActionRuntimeA
 	if (!PayAP(U)) return;
 	if (U->HasAuthority()) U->BumpUsage(Desc);
 
-	// D3 = ceil(d6 / 2)
-	const int32 d6       = FMath::RandRange(1, 6);
-	const int32 HealAmt  = (d6 + 1) / 2;
+	// D3 heal
+	const int32 d6      = FMath::RandRange(1, 6);
+	const int32 HealAmt = (d6 + 1) / 2;
 
-	const int32 PerModel = FMath::Max(1, U->GetWoundsPerModel());
-	const int32 MaxPool  = FMath::Max(0, U->ModelsMax * PerModel);
+	// <-- authoritative healing
+	U->ApplyHealing_Server(HealAmt);
 
-	const int32 NewPool  = FMath::Clamp(U->WoundsPool + HealAmt, 0, MaxPool);
-	U->WoundsPool        = NewPool;
-
-	int32 NewModels = (NewPool + PerModel - 1) / PerModel;
-	NewModels = FMath::Clamp(NewModels, 0, U->ModelsMax);
-	if (NewModels != U->ModelsCurrent)
-	{
-		U->ModelsCurrent = NewModels;
-		U->RebuildFormation();
-	}
 	U->ForceNetUpdate();
 }
 
@@ -438,8 +473,10 @@ UAction_FieldMedic::UAction_FieldMedic()
 	Desc.DisplayName  = NSLOCTEXT("Actions", "FieldMedic", "Field Medic");
 	Desc.Cost         = 2;
 	Desc.Phase        = ETurnPhase::Move;   // also allowed in Shoot via CanExecute
-	Desc.UsesPerMatch = 2;
+	Desc.UsesPerMatch = 3;
 	Desc.UsesPerTurn  = 1;
+	Desc.bRequiresFriendlyTarget = true;
+	Desc.bAllowSelfTarget        = true;
 }
 
 bool UAction_FieldMedic::CanExecute_Implementation(AUnitBase* U, const FActionRuntimeArgs& Args) const
@@ -453,39 +490,52 @@ bool UAction_FieldMedic::CanExecute_Implementation(AUnitBase* U, const FActionRu
 
 	if (!U->CanUseActionNow(Desc)) return false;
 
-	if (const UUnitActionResourceComponent* AP = U->FindComponentByClass<UUnitActionResourceComponent>())
-		if (AP->CurrentAP < Desc.Cost) return false;
+	const UUnitActionResourceComponent* AP = U->FindComponentByClass<UUnitActionResourceComponent>();
+	if (!AP || AP->CurrentAP < Desc.Cost) return false;
 
-	// Must have at least one valid friendly target within 12"
-	return FindClosestAllyWithin12(U) != nullptr;
+	// Need at least one healable friendly (including self) within 12"
+	TArray<AUnitBase*> Potentials;
+	GatherFriendliesWithin(U, 12.f, /*bIncludeSelf*/true, Potentials);
+	for (AUnitBase* P : Potentials)
+		if (IsHealable(P)) return true;
+
+	return false;
 }
 
-void UAction_FieldMedic::Execute_Implementation(AUnitBase* U, const FActionRuntimeArgs& /*Args*/)
+void UAction_FieldMedic::Execute_Implementation(AUnitBase* U, const FActionRuntimeArgs& Args)
 {
 	if (!U) return;
 	if (!PayAP(U)) return;
 
-	AUnitBase* Ally = FindClosestAllyWithin12(U);
-	if (!Ally) { EndPreview_Implementation(U); return; }
+	AUnitBase* Target = Args.TargetUnit ? Args.TargetUnit : CachedPreviewTarget.Get();
+	if (!Target)
+	{
+		EndPreview_Implementation(U); return;
+	}
+
+	// Friendly & in range (12")
+	if (Target->OwningPS != U->OwningPS)
+	{
+		EndPreview_Implementation(U); return;
+	}
+
+	TArray<AUnitBase*> Potentials;
+	GatherFriendliesWithin(U, 12.f, /*bIncludeSelf*/true, Potentials);
+	if (!Potentials.Contains(Target))
+	{
+		EndPreview_Implementation(U); return;
+	}
+
+	// If nothing to heal, do nothing (you could also early out in CanExecute already)
+	if (!IsHealable(Target))
+	{
+		EndPreview_Implementation(U); return;
+	}
 
 	if (U->HasAuthority()) U->BumpUsage(Desc);
 
 	const int32 HealAmt = FMath::RandRange(1, 6); // D6
-
-	const int32 PerModel = FMath::Max(1, Ally->GetWoundsPerModel());
-	const int32 MaxPool  = FMath::Max(0, Ally->ModelsMax * PerModel);
-
-	const int32 NewPool  = FMath::Clamp(Ally->WoundsPool + HealAmt, 0, MaxPool);
-	Ally->WoundsPool     = NewPool;
-
-	int32 NewModels = (NewPool + PerModel - 1) / PerModel;
-	NewModels = FMath::Clamp(NewModels, 0, Ally->ModelsMax);
-	if (NewModels != Ally->ModelsCurrent)
-	{
-		Ally->ModelsCurrent = NewModels;
-		Ally->RebuildFormation();
-	}
-	Ally->ForceNetUpdate();
+	Target->ApplyHealing_Server(HealAmt);
 
 	EndPreview_Implementation(U);
 }
@@ -495,21 +545,17 @@ void UAction_FieldMedic::BeginPreview_Implementation(AUnitBase* U)
 	if (!U) return;
 	if (AMatchGameState* GS = U->GetWorld() ? U->GetWorld()->GetGameState<AMatchGameState>() : nullptr)
 	{
-		if (AUnitBase* Ally = FindClosestAllyWithin12(U))
-		{
-			CachedPreviewTarget = Ally;
-			// Requires your GameState to implement this multicast (see previous guidance)
-			GS->Multicast_SetPotentialAllies({ Ally });
-		}
+		TArray<AUnitBase*> Potentials;
+		GatherFriendliesWithin(U, 12.f, /*bIncludeSelf*/true, Potentials);
+		GS->Multicast_SetPotentialAllies(Potentials);
+		GS->ActionPreview.Attacker = U;
 	}
 }
 
 void UAction_FieldMedic::EndPreview_Implementation(AUnitBase* U)
 {
 	if (AMatchGameState* GS = U && U->GetWorld() ? U->GetWorld()->GetGameState<AMatchGameState>() : nullptr)
-	{
 		GS->Multicast_ClearPotentialTargets();
-	}
 	CachedPreviewTarget.Reset();
 }
 

@@ -279,6 +279,9 @@ public:
     UFUNCTION() void OnSelected();
     UFUNCTION() void OnDeselected();
 
+    UFUNCTION(BlueprintCallable, Server, Reliable)
+    void ApplyHealing_Server(int32 Wounds);
+
     UFUNCTION(NetMulticast, Reliable)
     void Multicast_OnDamaged(int32 ModelsLost, int32 WoundsOverflow = 0);
 

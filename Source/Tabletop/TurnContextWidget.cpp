@@ -252,6 +252,7 @@ void UTurnContextWidget::Refresh()
     }
     
     RebuildActionButtons(Sel);
+    RebuildPassiveList(Sel);
 }
 
 // ---------------- AP + actions ----------------
@@ -347,6 +348,7 @@ void UTurnContextWidget::RebuildActionButtons(AUnitBase* Sel)
     for (UUnitAction* Act : Sel->GetActions())
     {
         if (!Act) continue;
+        if (Act->IsPassive()) continue; // Dont make buttons for passive abilities
         if (Act->Desc.Phase != Ph) continue;
 
         FActionRuntimeArgs PreviewArgs;
@@ -388,13 +390,38 @@ void UTurnContextWidget::RebuildActionButtons(AUnitBase* Sel)
     }
 }
 
+void UTurnContextWidget::RebuildPassiveList(AUnitBase* Sel)
+{
+    if (!PassivePanel) return;
+    PassivePanel->ClearChildren();
+    if (!Sel) return;
+
+    for (UUnitAction* Act : Sel->GetActions())
+    {
+        if (!Act || !Act->IsPassive()) continue;
+        if (!Act->Desc.bShowInPassiveList) continue;
+
+        // Simple “chip”: disabled button + text, with tooltip
+        UButton* Chip = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass());
+        Chip->SetIsEnabled(false);
+        Chip->SetToolTipText(Act->GetTooltipText().IsEmpty()
+                             ? FText::FromName(Act->Desc.ActionId)
+                             : Act->GetTooltipText());
+
+        UTextBlock* Txt = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+        Txt->SetText(Act->Desc.DisplayName);
+        Chip->AddChild(Txt);
+
+        PassivePanel->AddChild(Chip);
+    }
+}
 
 void UTurnContextWidget::HandleDynamicActionClicked(UUnitAction* Act)
 {
     AMatchPlayerController* PC = MPC();
     if (!PC || !PC->SelectedUnit || !Act) return;
 
-    // Ground-click actions: set pending id and wait for ground click
+    // Ground-click actions
     if (Act->Desc.bRequiresGroundClick)
     {
         PC->PendingGroundActionId = Act->Desc.ActionId;
@@ -402,21 +429,51 @@ void UTurnContextWidget::HandleDynamicActionClicked(UUnitAction* Act)
         return;
     }
 
-    // Enemy-target actions: if preview exists for my selected unit -> execute; else enter target mode
-    if (Act->Desc.bRequiresEnemyTarget)
+    // --- Friendly target lane (e.g., Field Medic) ---
+    if (Act->Desc.bRequiresFriendlyTarget)
     {
         AMatchGameState* S = GS();
-        const bool bPreviewReady = S && (S->Preview.Attacker == PC->SelectedUnit) && S->Preview.Target;
+        const bool bPreviewReady =
+            S && (S->Preview.Attacker == PC->SelectedUnit) && (S->Preview.Target != nullptr);
+
         if (bPreviewReady)
         {
             FActionRuntimeArgs Args;
-            Args.TargetUnit     = S->Preview.Target;
-            // Server stamps InstigatorPC
+            Args.TargetUnit = S->Preview.Target;          // friendly selected already
             PC->Server_ExecuteAction(PC->SelectedUnit, Act->Desc.ActionId, Args);
         }
         else
         {
-            PC->EnterTargetMode();
+            PC->EnterFriendlyTargetMode();               // NEW
+            // Optional: ask server to highlight friendlies in range for this unit
+            if (AMatchGameMode* GM = PC->GetWorld()->GetAuthGameMode<AMatchGameMode>())
+            {
+                GM->BroadcastPotentialFriendlies(PC->SelectedUnit); // implemented below
+            }
+        }
+        return;
+    }
+
+    // --- Existing enemy-target lane (Shoot) ---
+    if (Act->Desc.bRequiresEnemyTarget)
+    {
+        AMatchGameState* S = GS();
+        const bool bPreviewReady =
+            S && (S->Preview.Attacker == PC->SelectedUnit) && (S->Preview.Target != nullptr);
+
+        if (bPreviewReady)
+        {
+            FActionRuntimeArgs Args;
+            Args.TargetUnit = S->Preview.Target;
+            PC->Server_ExecuteAction(PC->SelectedUnit, Act->Desc.ActionId, Args);
+        }
+        else
+        {
+            PC->EnterTargetMode(); // enemy-target mode
+            if (AMatchGameMode* GM = PC->GetWorld()->GetAuthGameMode<AMatchGameMode>())
+            {
+                GM->BroadcastPotentialTargets(PC->SelectedUnit);
+            }
         }
         return;
     }

@@ -996,6 +996,30 @@ void AUnitBase::OnDeselected()
     HideRangePreview();
 }
 
+void AUnitBase::ApplyHealing_Server_Implementation(int32 Wounds)
+{
+    if (!HasAuthority() || Wounds <= 0) return;
+
+    const int32 PerModel = FMath::Max(1, WoundsRep);
+    const int32 MaxPool  = PerModel * FMath::Max(0, ModelsMax);
+
+    const int32 OldModels = ModelsCurrent;
+    WoundsPool = FMath::Clamp(WoundsPool + Wounds, 0, MaxPool);
+
+    int32 NewModels = (WoundsPool + PerModel - 1) / PerModel;
+    NewModels = FMath::Clamp(NewModels, 0, ModelsMax);
+
+    if (NewModels != ModelsCurrent)
+    {
+        ModelsCurrent = NewModels;
+        RebuildFormation();
+    }
+
+    // Cosmetic-only multicast if you want (do NOT mutate state in multicast)
+    // Multicast_OnHealed( /*...amount...*/ );
+
+    ForceNetUpdate();
+}
 
 void AUnitBase::OnRep_Models()
 {

@@ -1374,6 +1374,100 @@ void AMatchGameMode::Handle_SelectTarget(AMatchPlayerController* PC, AUnitBase* 
     S->ForceNetUpdate();
 }
 
+void AMatchGameMode::Handle_SelectFriendly(AMatchPlayerController* PC, AUnitBase* Attacker, AUnitBase* Target)
+{
+    if (!HasAuthority() || !PC || !Attacker) return;
+
+	AMatchGameState* S = GS();
+	if (!S || S->Phase != EMatchPhase::Battle) return;
+
+	// Accept both phases for friendly targeting
+	const bool bGoodPhase = (S->TurnPhase == ETurnPhase::Move || S->TurnPhase == ETurnPhase::Shoot);
+	if (!bGoodPhase) return;
+
+	if (PC->PlayerState != S->CurrentTurn) return;
+	if (Attacker->OwningPS != PC->PlayerState) return;
+
+    // --- Clearing branch (no target) ---
+    if (!Target)
+    {
+        if (S->Preview.Attacker == Attacker)
+        {
+            S->Preview.Attacker = nullptr;
+            S->Preview.Target   = nullptr;
+            S->Preview.Phase    = S->TurnPhase;
+
+            S->ActionPreview.Attacker = nullptr;
+            S->ActionPreview.Target   = nullptr;
+            S->ActionPreview.HitMod   = 0;
+            S->ActionPreview.SaveMod  = 0;
+            S->ActionPreview.Cover    = ECoverType::None;
+        }
+
+        S->SetGlobalTarget(nullptr);
+        S->Multicast_ApplySelectionVis(S->SelectedUnitGlobal, S->TargetUnitGlobal);
+
+        // show friendlies again for pick
+        BroadcastPotentialFriendlies(Attacker);
+
+        Attacker->FaceNearestEnemyInstant();
+
+        S->OnDeploymentChanged.Broadcast();
+        S->ForceNetUpdate();
+        return;
+    }
+
+    // --- Validate: target must be friendly (self allowed) ---
+    if (Target->OwningPS != PC->PlayerState) return;
+
+    // (Optional) do range/eligibility checks specific to your ability later.
+
+    // Set the preview (non-combat numbers will be zeroed)
+    S->Preview.Attacker = Attacker;
+    S->Preview.Target   = Target;
+    S->Preview.Phase    = S->TurnPhase;
+
+    S->ActionPreview.Attacker = Attacker;
+    S->ActionPreview.Target   = Target;
+    S->ActionPreview.Phase    = S->TurnPhase;
+
+    S->ActionPreview.HitMod   = 0;
+    S->ActionPreview.SaveMod  = 0;
+    S->ActionPreview.Cover    = ECoverType::None; // keep combat UI neutral
+
+    Attacker->FaceActorInstant(Target);
+
+    S->Multicast_ClearPotentialTargets();
+    S->SetGlobalTarget(Target);
+    S->Multicast_ApplySelectionVis(S->SelectedUnitGlobal, S->TargetUnitGlobal);
+
+    S->OnDeploymentChanged.Broadcast();
+    S->ForceNetUpdate();
+}
+
+void AMatchGameMode::BroadcastPotentialFriendlies(AUnitBase* Attacker)
+{
+	if (!Attacker) return;
+	AMatchGameState* S = GS(); if (!S) return;
+
+	const float rCm = 12.f * CmPerTabletopInch();
+	const float r2  = rCm * rCm;
+	const FVector src = Attacker->GetActorLocation();
+
+	TArray<AUnitBase*> out;
+	for (TActorIterator<AUnitBase> It(GetWorld()); It; ++It)
+	{
+		AUnitBase* U = *It;
+		if (!U || U->ModelsCurrent <= 0) continue;
+		if (U->OwningPS != Attacker->OwningPS) continue;
+		if (FVector::DistSquared(src, U->GetActorLocation()) > r2) continue;
+		// Optional: skip full-health squads
+		// if (!IsHealable(U)) continue;
+		out.Add(U);
+	}
+	S->Multicast_SetPotentialTargets(out);
+}
+
 FShotResolveResult AMatchGameMode::ResolveRangedAttack_Internal(
 	AUnitBase* Attacker, AUnitBase* Target, const TCHAR* DebugPrefix)
 {

@@ -145,30 +145,27 @@ void AMatchPlayerController::BeginDeployForUnit(FName UnitId, int32 InWeaponInde
 
 void AMatchPlayerController::OnRightClickCancel()
 {
-    AMatchGameState* S = GS();
-    if (!S) return;
+	AMatchGameState* S = GS();
+	if (!S) return;
 
-    if (S->Phase == EMatchPhase::Deployment)
-    {
-        PendingDeployUnit = NAME_None;
-        StopDeployCursorFeedback();
-        return;
-    }
+	if (S->Phase == EMatchPhase::Deployment)
+	{
+		PendingDeployUnit = NAME_None;
+		StopDeployCursorFeedback();
+		return;
+	}
 
-    // Battle
-    if (bTargetMode && SelectedUnit)
-    {
-    	PendingGroundActionId = NAME_None;
-    	PendingActionUnit = nullptr;
-    	
-        // Cancel preview on server and exit target mode
-        Server_CancelPreview(SelectedUnit);
-        bTargetMode = false;
-        return;
-    }
+	if (bTargetMode && SelectedUnit)
+	{
+		PendingGroundActionId = NAME_None;
+		PendingActionUnit     = nullptr;
 
-    // Otherwise clear local selection
-    ClearSelection();
+		Server_CancelPreview(SelectedUnit);
+		ExitTargetMode();          // <-- was: bTargetMode = false;
+		return;
+	}
+
+	ClearSelection();
 }
 
 void AMatchPlayerController::OnLeftClick()
@@ -206,27 +203,41 @@ void AMatchPlayerController::OnLeftClick()
     }
 
     // ---------- Phase-agnostic (but only when it's your turn): try unit click first ----------
-    if (AUnitBase* Clicked = TraceUnit())
-    {
-        const bool bClickedFriendly = (Clicked->OwningPS == PlayerState);
-        const bool bHaveSelFriendly = (SelectedUnit && SelectedUnit->OwningPS == PlayerState);
+	if (AUnitBase* Clicked = TraceUnit())
+	{
+		const bool bClickedFriendly = (Clicked->OwningPS == PlayerState);
+		const bool bHaveSelFriendly = (SelectedUnit && SelectedUnit->OwningPS == PlayerState);
 
-        // If we're in target mode (Shoot) and clicked an enemy, set preview
-        if (bTargetMode && bHaveSelFriendly && !bClickedFriendly && S->TurnPhase == ETurnPhase::Shoot)
-        {
-            Server_SelectTarget(SelectedUnit, Clicked);
-            return;
-        }
+		// --- Target mode branch (works in Move or Shoot) ---
+		if (bTargetMode && bHaveSelFriendly)
+		{
+			if (bFriendlyTargetMode)
+			{
+				// Friendly targeting (Field Medic, etc.) — accept friendly clicks in ANY phase
+				if (bClickedFriendly)
+				{
+					Server_SelectFriendly(SelectedUnit, Clicked);
+				}
+				// Ignore enemy clicks while in friendly mode
+				return;
+			}
 
-        // Otherwise, clicking a friendly just (re)selects it
-        if (bClickedFriendly)
-        {
-            SelectUnit(Clicked); // ideally this calls a server RPC that ends up in GS->SetGlobalSelected
-            return;
-        }
+			// Enemy targeting (Shoot) — only accept enemy clicks during Shoot phase
+			if (S->TurnPhase == ETurnPhase::Shoot && !bClickedFriendly)
+			{
+				Server_SelectTarget(SelectedUnit, Clicked);
+			}
+			// Ignore friendly clicks while aiming at enemies
+			return;
+		}
 
-        // Clicked an enemy outside target mode -> ignore
-    }
+		// --- Normal selection when NOT in any target mode ---
+		if (bClickedFriendly)
+		{
+			SelectUnit(Clicked);
+			return;
+		}
+	}
 
     // ---------- Pending ground-required action? ----------
     if (PendingGroundActionId != NAME_None && SelectedUnit && SelectedUnit->OwningPS == PlayerState)
@@ -543,6 +554,14 @@ void AMatchPlayerController::Server_CancelPreview_Implementation(AUnitBase* Atta
 	if (AMatchGameMode* GM = GetWorld()->GetAuthGameMode<AMatchGameMode>())
 	{
 		GM->Handle_CancelPreview(this, Attacker);
+	}
+}
+
+void AMatchPlayerController::Server_SelectFriendly_Implementation(AUnitBase* Attacker, AUnitBase* Target)
+{
+	if (AMatchGameMode* GM = GetWorld()->GetAuthGameMode<AMatchGameMode>())
+	{
+		GM->Handle_SelectFriendly(this, Attacker, Target);
 	}
 }
 

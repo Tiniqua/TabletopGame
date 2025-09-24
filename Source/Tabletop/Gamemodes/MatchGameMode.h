@@ -444,6 +444,9 @@ public:
 	// Targeting & shooting
 	bool ValidateShoot(AUnitBase* Attacker, AUnitBase* Target) const;
 	void Handle_SelectTarget(AMatchPlayerController* PC, AUnitBase* Attacker, AUnitBase* Target);
+	void Handle_SelectFriendly(AMatchPlayerController* PC, AUnitBase* Attacker, AUnitBase* Target);
+	void BroadcastPotentialFriendlies(class AUnitBase* Attacker);
+	
 	void Handle_ConfirmShoot(AMatchPlayerController* PC, AUnitBase* Attacker, AUnitBase* Target);
 	int32 CountVisibleTargetModels(const AUnitBase* Attacker, const AUnitBase* Target) const;
 	

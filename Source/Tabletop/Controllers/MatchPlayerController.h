@@ -62,7 +62,6 @@ public:
 
 	// Expose helpers for the widget to call
 	UFUNCTION(BlueprintCallable) void EnterTargetMode() { bTargetMode = true; }
-	UFUNCTION(BlueprintCallable) void ExitTargetMode()  { bTargetMode = false; }
 	
 	UFUNCTION(Client, Reliable)
 	void Client_KickUIRefresh();
@@ -93,6 +92,8 @@ public:
 	void Server_CancelPreview(AUnitBase* Attacker);
 	UFUNCTION(Server, Reliable)
 	void Server_ConfirmShoot(AUnitBase* Attacker, AUnitBase* Target);
+	UFUNCTION(Server, Reliable)
+	void Server_SelectFriendly(class AUnitBase* Attacker, class AUnitBase* Target);
 
 	/** Class reference to the deployment widget */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="UI")
@@ -129,6 +130,14 @@ public:
 
 	UPROPERTY()
 	TObjectPtr<AUnitBase> PendingActionUnit = nullptr;
+
+	UPROPERTY() bool bFriendlyTargetMode = false; // NEW
+
+	UFUNCTION(BlueprintCallable) 
+	void EnterFriendlyTargetMode() { bTargetMode = true; bFriendlyTargetMode = true; } 
+	
+	UFUNCTION(BlueprintCallable) 
+	void ExitTargetMode() { bTargetMode = false; bFriendlyTargetMode = false; } // UPDATE
 	
 	UFUNCTION(Server, Reliable)
 	void Server_ExecuteAction(AUnitBase* Unit, FName ActionId, FActionRuntimeArgs Args);

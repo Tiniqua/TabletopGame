@@ -13,6 +13,8 @@ class UUnitActionResourceComponent;
 class UAbilityEventSubsystem;
 struct FAbilityEventContext;
 
+
+
 UENUM(BlueprintType)
 enum class ETurnPhase : uint8
 {
@@ -36,9 +38,16 @@ struct FActionDescriptor
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) bool bRequiresGroundClick = false;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) bool bRequiresEnemyTarget = false;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly)bool bRequiresFriendlyTarget = false;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly)bool bAllowSelfTarget = false; 
 
 	// If this action applies a debt to the next phase's AP
 	UPROPERTY(EditAnywhere, BlueprintReadOnly) int32 NextPhaseAPCost = 0;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly) bool bPassive = false;                // no button, no AP
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly) bool bShowInPassiveList = true;      // for UI chips
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(MultiLine="true"))
+	FText Tooltip;
 };
 
 USTRUCT(BlueprintType)
@@ -74,9 +83,20 @@ public:
 	virtual void EndPreview_Implementation(AUnitBase* Unit);
 
 	// Optional: allow actions to bind to global events (e.g., reset usage caps)
-	virtual void Setup(AUnitBase* Unit) {}
+	virtual void Setup(AUnitBase* Unit);
 
 	virtual bool LeavesLingeringState() const { return false; }
+
+	UFUNCTION(BlueprintNativeEvent, BlueprintPure)
+	bool IsPassive() const;      // default false
+	virtual bool IsPassive_Implementation() const { return Desc.bPassive; }
+
+	UFUNCTION(BlueprintNativeEvent, BlueprintPure)
+	FText GetTooltipText() const; // default to Desc.Tooltip
+	virtual FText GetTooltipText_Implementation() const { return Desc.Tooltip; }
+
+	UPROPERTY()
+	AUnitBase* OwnerUnit = nullptr;
 
 protected:
 	bool PayAP(AUnitBase* Unit) const;
@@ -133,8 +153,6 @@ public:
 
 private:
 	UFUNCTION() void OnAnyEvent(const struct FAbilityEventContext& Ctx);
-
-	TWeakObjectPtr<AUnitBase> OwnerUnit;
 };
 
 // +1 to hit for next shot

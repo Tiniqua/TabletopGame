@@ -73,6 +73,7 @@ protected:
     UPROPERTY(meta=(BindWidget)) UTextBlock* SaveFailText     = nullptr;
     UPROPERTY(meta=(BindWidget)) UTextBlock* EstDamageText    = nullptr;
     UPROPERTY(meta=(BindWidget)) UTextBlock* CoverStatusText  = nullptr;
+    UPROPERTY(meta=(BindWidgetOptional)) UPanelWidget* PassivePanel = nullptr;
 
     UPROPERTY(meta=(BindWidget)) class UPanelWidget* KeywordPanel = nullptr;
     UPROPERTY(EditDefaultsOnly)  TSubclassOf<class UKeywordChipWidget> KeywordChipClass;
@@ -88,7 +89,9 @@ protected:
     void Refresh();
     void UpdateActionPoints();
     void RebuildActionButtons(AUnitBase* Sel);
-
+    
+    void RebuildPassiveList(AUnitBase* Sel);
+    
     void FillAttacker(AUnitBase* U);
     void FillWeaponLoadout(AUnitBase* U);
     void FillTarget(AUnitBase* U);
