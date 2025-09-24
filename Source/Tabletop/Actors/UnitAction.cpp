@@ -29,7 +29,7 @@ bool UUnitAction::PayAP(AUnitBase* Unit) const
 	return AP && AP->Pay(Desc.Cost);
 }
 
-void UUnitAction::Execute_Implementation(AUnitBase* /*Unit*/, const FActionRuntimeArgs& /*Args*/)
+void UUnitAction::Execute_Implementation(AUnitBase* Unit, const FActionRuntimeArgs& /*Args*/)
 {
 	// Base does nothing
 }
@@ -265,6 +265,7 @@ void UAction_Overwatch::OnAnyEvent(const FAbilityEventContext& Ctx)
 		{
 			GM->Handle_OverwatchShot(Watcher, Mover);  // authority resolves
 			Watcher->SetOverwatchArmed(false);
+			GM->Emit(ECombatEvent::Ability_Expired, Watcher);
 		}
 	}
 }

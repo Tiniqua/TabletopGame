@@ -817,9 +817,16 @@ void AUnitBase::ApplyDamage_Server(int32 Damage)
 
     if (WoundsPool <= 0)
     {
-        // (Multicast already sent above; location-based sound will still play after destroy)
-        Destroy();
-        return;
+        if (HasAuthority())
+        {
+            if (AMatchGameMode* GM = GetWorld()->GetAuthGameMode<AMatchGameMode>())
+            {
+                GM->Emit(ECombatEvent::Unit_Destroyed, this);
+            }
+
+            Destroy();   // server-only; will replicate destruction to all clients
+        }
+        return;          // clients do nothing here; they’ll get the destroy from server
     }
 
     ForceNetUpdate();
@@ -833,21 +840,10 @@ void AUnitBase::ApplyMortalDamage_Server(int32 Damage)
 
 void AUnitBase::Multicast_OnDamaged_Implementation(int32 ModelsLost, int32 WoundsOverflow)
 {
-    OnDamaged(ModelsLost, WoundsOverflow);
-}
-
-void AUnitBase::OnDamaged(int32 ModelsLost, int32 /*WoundsOverflow*/)
-{
-    if (!HasAuthority()) return;
-
-    ModelsCurrent = FMath::Clamp(ModelsCurrent - FMath::Max(0, ModelsLost), 0, ModelsMax);
-    RebuildFormation();
-    ForceNetUpdate();
-
     if (Snd_UnderFire)
     {
-        UGameplayStatics::PlaySoundAtLocation(this, Snd_UnderFire, GetActorLocation(),
-            1.f, 1.f, 0.f, SndAttenuation, SndConcurrency);
+        UGameplayStatics::PlaySoundAtLocation(
+            this, Snd_UnderFire, GetActorLocation(), 1.f, 1.f, 0.f, SndAttenuation, SndConcurrency);
     }
 }
 
@@ -900,12 +896,26 @@ void AUnitBase::ConsumeForStage(ECombatEvent Stage, bool bAsAttacker)
         if (M.Expiry == EModifierExpiry::NextNOwnerShots && bAsAttacker)
         {
             if (M.UsesRemaining > 0 && --M.UsesRemaining == 0)
+            {
                 ActiveCombatMods.RemoveAtSwap(i);
+                if (AMatchGameMode* GM = GetWorld()->GetAuthGameMode<AMatchGameMode>())
+                {
+                    if (!HasAuthority()) return;
+                    GM->Emit(ECombatEvent::Ability_Expired, this);
+                }
+            }
         }
         else if (M.Expiry == EModifierExpiry::Uses)
         {
             if (M.UsesRemaining > 0 && --M.UsesRemaining == 0)
+            {
                 ActiveCombatMods.RemoveAtSwap(i);
+                if (AMatchGameMode* GM = GetWorld()->GetAuthGameMode<AMatchGameMode>())
+                {
+                    if (!HasAuthority()) return;
+                    GM->Emit(ECombatEvent::Ability_Expired, this);
+                }
+            }
         }
     }
 }
@@ -916,7 +926,14 @@ void AUnitBase::OnTurnAdvanced()
     {
         FUnitModifier& M = ActiveCombatMods[i];
         if (M.Expiry == EModifierExpiry::UntilEndOfTurn && --M.TurnsRemaining <= 0)
+        {
             ActiveCombatMods.RemoveAtSwap(i);
+            if (AMatchGameMode* GM = GetWorld()->GetAuthGameMode<AMatchGameMode>())
+            {
+                if (!HasAuthority()) return;
+                GM->Emit(ECombatEvent::Ability_Expired, this);
+            }
+        }
     }
 }
 
@@ -926,7 +943,14 @@ void AUnitBase::OnRoundAdvanced()
     {
         FUnitModifier& M = ActiveCombatMods[i];
         if (M.Expiry == EModifierExpiry::UntilEndOfRound && --M.TurnsRemaining <= 0)
+        {
             ActiveCombatMods.RemoveAtSwap(i);
+            if (AMatchGameMode* GM = GetWorld()->GetAuthGameMode<AMatchGameMode>())
+            {
+                if (!HasAuthority()) return;
+                GM->Emit(ECombatEvent::Ability_Expired, this);
+            }
+        }
     }
 }
 void AUnitBase::ApplyOutlineToAllModels(UMaterialInterface* Mat)

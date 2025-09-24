@@ -278,7 +278,6 @@ public:
     // Hooks for UI / visuals
     UFUNCTION() void OnSelected();
     UFUNCTION() void OnDeselected();
-    UFUNCTION() void OnDamaged(int32 ModelsLost, int32 WoundsOverflow = 0);
 
     UFUNCTION(NetMulticast, Reliable)
     void Multicast_OnDamaged(int32 ModelsLost, int32 WoundsOverflow = 0);

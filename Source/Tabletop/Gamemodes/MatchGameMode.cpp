@@ -439,6 +439,25 @@ void AMatchGameState::BeginPlay()
 	FWorldDelegates::LevelAddedToWorld.AddUObject(this, &AMatchGameState::OnLevelAdded);
 }
 
+void AMatchGameMode::Emit(ECombatEvent E, AUnitBase* Src, AUnitBase* Tgt,
+							  const FVector& Pos, float Radius,
+							  const FGameplayTagContainer* CurrentTags)
+{
+	if (UAbilityEventSubsystem* Bus = AbilityBus(GetWorld()))
+	{
+		FAbilityEventContext C;
+		C.Event   = E;
+		C.GM      = const_cast<AMatchGameMode*>(this);
+		C.GS      = GS();
+		C.Source  = Src;
+		C.Target  = Tgt;
+		C.WorldPos= Pos;
+		C.Radius  = Radius;
+		if (CurrentTags) C.Tags = *CurrentTags;
+		Bus->Broadcast(C);
+	}
+}
+
 void AMatchGameState::OnLevelAdded(ULevel* Level, UWorld* World)
 {
 	if (World == GetWorld())
@@ -1217,10 +1236,12 @@ void AMatchGameMode::Handle_MoveUnit(AMatchPlayerController* PC, AUnitBase* Unit
     if (PC->PlayerState != S->CurrentTurn) return;
     if (Unit->OwningPS != PC->PlayerState) return;
 
+	Emit(ECombatEvent::PreValidateMove, Unit, nullptr, WantedDest);
+
     FVector finalDest = WantedDest;
     float   spentTTIn = 0.f;
     bool    bClamped  = false;
-
+	
     ResolveMoveToBudget(Unit, WantedDest, finalDest, spentTTIn, bClamped);
 
     if (spentTTIn <= KINDA_SMALL_NUMBER || finalDest.Equals(Unit->GetActorLocation(), 0.1f))
@@ -1234,10 +1255,12 @@ void AMatchGameMode::Handle_MoveUnit(AMatchPlayerController* PC, AUnitBase* Unit
 
     Unit->MoveBudgetInches = FMath::Max(0.f, Unit->MoveBudgetInches - spentTTIn);
     Unit->bMovedThisTurn = true;      // NEW: track moved for Heavy/Assault logic
+	Emit(ECombatEvent::PreMoveExecute, Unit, nullptr, finalDest);
     Unit->SetActorLocation(finalDest);
 	Unit->NotifyMoveChanged();
 	Unit->OnRep_Move();
 	Unit->ForceNetUpdate();
+	Emit(ECombatEvent::PostMove, Unit, nullptr, finalDest);
 
 	const FVector Center = Unit->GetActorLocation();
 	const FVector ThreatDir = (Unit->CurrentTarget->GetActorLocation() - Center).GetSafeNormal2D(); // or the most threatening direction
@@ -1252,16 +1275,7 @@ void AMatchGameMode::Handle_MoveUnit(AMatchPlayerController* PC, AUnitBase* Unit
 		S->ForceNetUpdate();
 	}
 
-    if (UAbilityEventSubsystem* Bus = AbilityBus(GetWorld()))
-    {
-        FAbilityEventContext Ctx;
-        Ctx.Event    = ECombatEvent::Unit_Moved;
-        Ctx.GM       = this;
-        Ctx.GS       = S;
-        Ctx.Source   = Unit;
-        Ctx.WorldPos = finalDest;
-        Bus->Broadcast(Ctx);
-    }
+	Emit(ECombatEvent::Unit_Moved, Unit, nullptr, finalDest);
     
     NotifyUnitTransformChanged(Unit);
     Unit->ForceNetUpdate();
@@ -1426,7 +1440,8 @@ FShotResolveResult AMatchGameMode::ResolveRangedAttack_Internal(
 	ACoverVolume* PrimaryCover = nullptr;
 	TMap<ACoverVolume*, int32> CoverHits;
 	QueryCoverWithActor(Attacker, Target, HitMod, SaveMod, Cover, PrimaryCover, &CoverHits);
-	
+
+	Emit(ECombatEvent::PreHitCalc, Attacker, Target);
 	// ===== Stage: PreHitCalc =====
 	{
 		FStageResult K = FKeywordProcessor::BuildForStage(Ctx, ECombatEvent::PreHitCalc);
@@ -1458,6 +1473,7 @@ FShotResolveResult AMatchGameMode::ResolveRangedAttack_Internal(
 				Ctx.HitRolls.Add((uint8)r);
 			}
 		}
+		Emit(ECombatEvent::PostHitRolls, Attacker, Target);
 
 		// PostHitRolls (Sustained Hits, Lethal Hits)
 		if (Ctx.Weapon)
@@ -1544,6 +1560,7 @@ FShotResolveResult AMatchGameMode::ResolveRangedAttack_Internal(
 		}
 	}
 
+	Emit(ECombatEvent::PreWoundCalc, Attacker, Target);
 	// ===== Stage: PreWoundCalc =====
 	{
 		FStageResult K = FKeywordProcessor::BuildForStage(Ctx, ECombatEvent::PreWoundCalc);
@@ -1573,8 +1590,10 @@ FShotResolveResult AMatchGameMode::ResolveRangedAttack_Internal(
 			for (uint8 r : Ctx.WoundRolls) if (r >= Ctx.CritWoundThreshold) ++Crits;
 			Ctx.CritWounds_NoSave += Crits;
 		}
+		Emit(ECombatEvent::PostWoundRolls, Attacker, Target);
 	}
 
+	Emit(ECombatEvent::PreSavingThrows, Attacker, Target);
 	// ===== Stage: PreSavingThrows =====
 	bool bIgnoreCover = false;
 	int32 InvulnOffset = 0;
@@ -1636,6 +1655,8 @@ FShotResolveResult AMatchGameMode::ResolveRangedAttack_Internal(
 	// Face for aesthetics
 	Attacker->FaceActorInstant(Target);
 
+	Emit(ECombatEvent::PostSavingThrows, Attacker, Target);
+	
 	// LOS clamp
 	const int32 TargetModels    = FMath::Max(0, Target->ModelsCurrent);
 	const int32 VisibleModels   = CountVisibleTargetModels(Attacker, Target);
@@ -1660,6 +1681,7 @@ FShotResolveResult AMatchGameMode::ResolveRangedAttack_Internal(
 	}
 
 	const int32 FinalDamage = ApplyFeelNoPain(ClampedDamage, FnpTN);
+	Emit(ECombatEvent::PostDamageCompute, Attacker, Target);
 
 	// Debug / FX
 	const FVector L0  = Attacker->GetActorLocation();
@@ -1753,6 +1775,7 @@ void AMatchGameMode::Handle_ConfirmShoot(AMatchPlayerController* PC, AUnitBase* 
     if (Attacker->OwningPS != PC->PlayerState) return;
     if (!ValidateShoot(Attacker, Target)) return;
 
+	Emit(ECombatEvent::PreValidateShoot, Attacker, Target);
     ResolveRangedAttack_Internal(Attacker,Target,TEXT("[Shoot]"));
 
 	if (S->Preview.Attacker == Attacker)
@@ -1957,11 +1980,19 @@ void AMatchGameMode::ResetUnitRoundStateFor(APlayerState* TurnOwner)
         {
             if (U->OwningPS == TurnOwner)
             {
+            	if (U->bOverwatchArmed)
+            	{
+            		Emit(ECombatEvent::Ability_Expired, U); // never triggered -> expired now
+            	}
+
+            	U->SetOverwatchArmed(false);          // <-- server gets an immediate local hide
+            	U->bOverwatchVisibleToEnemies = false; // optional: also clear the telegraph flag
+            	U->ForceNetUpdate();
+            	
                 U->MoveBudgetInches = U->MoveMaxInches;
                 U->bHasShot         = false;
                 U->bMovedThisTurn   = false;
                 U->bAdvancedThisTurn= false;
-                U->bOverwatchArmed = false;
 
                 U->OnTurnAdvanced(); // decay turn-based unit mods
                 U->ForceNetUpdate();
@@ -2198,6 +2229,11 @@ void AMatchGameMode::HandleStartBattle(APlayerController* PC)
         S->Multicast_ClearPotentialTargets();
     	S->Multicast_ApplySelectionVis(S->SelectedUnitGlobal, S->TargetUnitGlobal);
 
+    	Emit(ECombatEvent::Game_Begin);
+    	Emit(ECombatEvent::Round_Begin);
+    	Emit(ECombatEvent::Turn_Begin, /*Src=*/nullptr);     // optional: pass a unit owned by CurrentTurn if you prefer
+    	Emit(ECombatEvent::Phase_Begin);                     // Move phase begins
+
         // Recalc objectives ONCE, then award Move-phase AP (with Round1/Move guard inside unit)
         for (TActorIterator<AObjectiveMarker> It(GetWorld()); It; ++It)
             if (AObjectiveMarker* Obj = *It) Obj->RecalculateControl();
@@ -2245,7 +2281,9 @@ void AMatchGameMode::HandleEndPhase(APlayerController* PC)
 
     if (S->TurnPhase == ETurnPhase::Move)
     {
+    	Emit(ECombatEvent::Phase_End);
         S->TurnPhase = ETurnPhase::Shoot;
+    	Emit(ECombatEvent::Phase_Begin); 
         ApplyPhaseStartAP(S->CurrentTurn, ETurnPhase::Shoot);
         S->OnDeploymentChanged.Broadcast();
         S->ForceNetUpdate();
@@ -2256,7 +2294,11 @@ void AMatchGameMode::HandleEndPhase(APlayerController* PC)
     if (S->TurnInRound == 0)
     {
         S->TurnInRound = 1;
+    	Emit(ECombatEvent::Phase_End);       // Shoot ends
+    	Emit(ECombatEvent::Turn_End);
         S->CurrentTurn = OtherPlayer(S->CurrentTurn);
+    	Emit(ECombatEvent::Turn_Begin);      // new player’s turn begins
+    	Emit(ECombatEvent::Phase_Begin);
         S->TurnPhase   = ETurnPhase::Move;
 
         ResetUnitRoundStateFor(S->CurrentTurn);
@@ -2267,7 +2309,9 @@ void AMatchGameMode::HandleEndPhase(APlayerController* PC)
         return;
     }
 
-
+	Emit(ECombatEvent::Phase_End);       // Shoot ends
+	Emit(ECombatEvent::Turn_End);        // second player’s turn ends
+	Emit(ECombatEvent::Round_End);
     S->CurrentRound = FMath::Clamp<uint8>(S->CurrentRound + 1, 1, S->MaxRounds);
     S->TurnInRound  = 0;
 
@@ -2282,6 +2326,7 @@ void AMatchGameMode::HandleEndPhase(APlayerController* PC)
     // If we've finished the last round, end the game and show summary
     if (S->CurrentRound >= S->MaxRounds)
     {
+    	Emit(ECombatEvent::Game_End);
         BuildMatchSummaryAndReveal();
         return;
     }
@@ -2289,6 +2334,10 @@ void AMatchGameMode::HandleEndPhase(APlayerController* PC)
     // Otherwise continue normally
     S->CurrentTurn = OtherPlayer(S->CurrentTurn);
     S->TurnPhase   = ETurnPhase::Move;
+
+	Emit(ECombatEvent::Round_Begin);     // new round starts
+	Emit(ECombatEvent::Turn_Begin);      // new active player’s turn begins
+	Emit(ECombatEvent::Phase_Begin);
     
     ResetUnitRoundStateFor(S->CurrentTurn);
     ApplyPhaseStartAP(S->CurrentTurn, ETurnPhase::Move);
@@ -2356,7 +2405,9 @@ void AMatchGameMode::Handle_OverwatchShot(AUnitBase* Attacker, AUnitBase* Target
     if (!Attacker->IsEnemy(Target)) return;
     if (!ValidateShoot(Attacker, Target)) return;
 
+	Emit(ECombatEvent::PreValidateShoot, Attacker, Target);
     ResolveRangedAttack_Internal(Attacker, Target, TEXT("[Overwatch]"));
+	
 }
 
 void AMatchGameMode::Handle_AdvanceUnit(AMatchPlayerController* PC, AUnitBase* Unit)
@@ -2368,6 +2419,8 @@ void AMatchGameMode::Handle_AdvanceUnit(AMatchPlayerController* PC, AUnitBase* U
     if (PC->PlayerState != S->CurrentTurn) return;
     if (Unit->OwningPS != PC->PlayerState) return;
     if (Unit->bAdvancedThisTurn) return; // already advanced
+	
+	Emit(ECombatEvent::PreAdvanceExecute, Unit);
 
     // Roll bonus in [1 .. MoveMaxInches] (integers)
     const int32 Max = FMath::Max(1, (int32)FMath::RoundToInt(Unit->MoveMaxInches));
@@ -2375,6 +2428,7 @@ void AMatchGameMode::Handle_AdvanceUnit(AMatchPlayerController* PC, AUnitBase* U
 
     Unit->MoveBudgetInches += (float)Bonus;
     Unit->bAdvancedThisTurn = true;
+	Emit(ECombatEvent::PostAdvance, Unit);
 	Unit->NotifyMoveChanged();
 	Unit->OnRep_Move();
     Unit->ForceNetUpdate();
@@ -2401,6 +2455,7 @@ void AMatchGameMode::ApplyDelayedDamageAndReport(AUnitBase* Attacker, AUnitBase*
     if (IsValid(Target) && TotalDamage > 0)
     {
         Target->ApplyDamage_Server(TotalDamage);
+    	Emit(ECombatEvent::PostResolveAttack, Attacker, Target);
     }
 
     S->Multicast_DrawShotDebug(DebugMid, DebugMsg, FColor::Black, 8.f);
@@ -2658,6 +2713,14 @@ void AMatchGameMode::Handle_ExecuteAction(AMatchPlayerController* PC, AUnitBase*
 
     // Execute (action pays AP internally)
     Action->Execute(Unit, Args);
+    
+	if (!Action->LeavesLingeringState())
+	{
+		if (AMatchGameMode* GM = GetWorld()->GetAuthGameMode<AMatchGameMode>())
+		{
+			GM->Emit(ECombatEvent::Ability_Expired, Unit);
+		}
+	}
 
     // You can optionally broadcast a "Post" event if needed
 }

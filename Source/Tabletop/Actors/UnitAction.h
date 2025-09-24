@@ -76,6 +76,8 @@ public:
 	// Optional: allow actions to bind to global events (e.g., reset usage caps)
 	virtual void Setup(AUnitBase* Unit) {}
 
+	virtual bool LeavesLingeringState() const { return false; }
+
 protected:
 	bool PayAP(AUnitBase* Unit) const;
 };
@@ -126,6 +128,8 @@ public:
 	virtual void Setup(AUnitBase* Unit) override;
 	virtual bool CanExecute_Implementation(AUnitBase* Unit, const FActionRuntimeArgs& Args) const override;
 	virtual void Execute_Implementation(AUnitBase* Unit, const FActionRuntimeArgs& Args) override;
+
+	bool LeavesLingeringState() const override { return true; }
 
 private:
 	UFUNCTION() void OnAnyEvent(const struct FAbilityEventContext& Ctx);

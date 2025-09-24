@@ -297,7 +297,7 @@ public:
 
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	virtual void BeginPlay() override;
-
+	
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="NetDebug")
 	bool bEnableNetDebugDraw = true;
 
@@ -362,6 +362,10 @@ public:
 	UFUNCTION() void RebroadcastCoverPresetsReliable();
 	UFUNCTION() void OnClientReportedLoaded(class APlayerController* PC);
 	virtual void PostSeamlessTravel() override;
+
+	void Emit(ECombatEvent E, AUnitBase* Src=nullptr, AUnitBase* Tgt=nullptr,
+		  const FVector& Pos=FVector::ZeroVector, float Radius=0.f,
+		  const FGameplayTagContainer* Tags=nullptr);
 
 	UPROPERTY() TSet<TWeakObjectPtr<APlayerController>> ClientsLoaded;
 
