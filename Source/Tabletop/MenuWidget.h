@@ -83,6 +83,12 @@ public:
     UFUNCTION(BlueprintCallable, Category="Networking|Sessions")
     void JoinSessionByIndex(int32 ResultIndex);
 
+    UFUNCTION(BlueprintCallable, Category="Audio")
+    void UI_SetMasterVolume(float Linear01);
+
+    UFUNCTION(BlueprintPure, Category="Audio")
+    float UI_GetMasterVolume() const;
+
     // Internal handlers
     void HandleFindSessionsComplete(bool bWasSuccessful);
     void HandleJoinSessionComplete(FName InSessionName, EOnJoinSessionCompleteResult::Type Result);

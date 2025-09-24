@@ -20,7 +20,8 @@ class TABLETOP_API UTabletopGameInstance : public UGameInstance
 	TSharedPtr<IOnlineSession, ESPMode::ThreadSafe> SessionInterface;
 
 	virtual void Init() override;
-
+	virtual void OnStart() override;
+	
 	// Handlers
 	void OnInviteReceived(const FUniqueNetId& /*UserId*/, const FUniqueNetId& /*FromId*/,
 						  const FString& /*AppId*/, const FOnlineSessionSearchResult& /*InviteResult*/);
@@ -39,6 +40,21 @@ class TABLETOP_API UTabletopGameInstance : public UGameInstance
 	void HandleJoinCompleteGI(FName SessionName, EOnJoinSessionCompleteResult::Type Result);
 	
 	void OnJoinComplete(FName SessionName, EOnJoinSessionCompleteResult::Type Result);
+
+	UPROPERTY(EditDefaultsOnly, Category="Audio") USoundMix*   MasterMix = nullptr;
+	UPROPERTY(EditDefaultsOnly, Category="Audio") USoundClass* MasterClass = nullptr;
+
+public:
+	UFUNCTION(BlueprintCallable, Category="Audio")
+	void SetMasterVolume(float Linear01);
+	
+	UFUNCTION(BlueprintPure, Category="Audio")
+	float GetMasterVolume() const { return MasterVolume01; }
+	
+	void ApplyVolumeToWorld(UWorld* World);
+	void ApplyEverywhere();
+
+	UPROPERTY() float MasterVolume01 = 1.f; // default full volume
 
 	FOnlineSessionSearchResult PendingInviteResult;
 	FDelegateHandle DestroyForInviteHandle;

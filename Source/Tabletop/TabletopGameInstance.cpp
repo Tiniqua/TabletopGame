@@ -3,6 +3,7 @@
 
 #include "OnlineSessionSettings.h"
 #include "Interfaces/OnlineIdentityInterface.h"
+#include "Kismet/GameplayStatics.h"
 
 static bool IsSteamIdentityReady()
 {
@@ -37,6 +38,42 @@ void UTabletopGameInstance::Init()
 					FOnJoinSessionCompleteDelegate::CreateUObject(this, &UTabletopGameInstance::OnJoinComplete));
 		}
 	}
+}
+
+void UTabletopGameInstance::OnStart()
+{
+	Super::OnStart();
+	ApplyEverywhere();
+}
+
+void UTabletopGameInstance::SetMasterVolume(float Linear01)
+{
+	MasterVolume01 = FMath::Clamp(Linear01, 0.f, 1.f);
+	ApplyEverywhere();
+
+	// TODO optional: save to disk (SaveGame) so it persists across app restarts
+}
+
+void UTabletopGameInstance::ApplyEverywhere()
+{
+	// Apply to current world (client local audio)
+	if (UWorld* World = GetWorld())
+	{
+		ApplyVolumeToWorld(World);
+	}
+}
+
+void UTabletopGameInstance::ApplyVolumeToWorld(UWorld* World)
+{
+	if (!World || !MasterMix || !MasterClass) return;
+
+	// Smooth 0.2s fade; pitch stays 1.0
+	UGameplayStatics::SetSoundMixClassOverride(
+		World, MasterMix, MasterClass,
+		MasterVolume01, /*Pitch*/1.f, /*FadeInTime*/0.2f, /*bApplyToChildren*/true);
+
+	// Ensure the mix is active (safe to push repeatedly)
+	UGameplayStatics::PushSoundMixModifier(World, MasterMix);
 }
 
 void UTabletopGameInstance::OnInviteReceived(const FUniqueNetId&, const FUniqueNetId&, const FString&,

@@ -11,6 +11,7 @@
 #include "OnlineSubsystem.h"
 #include "Interfaces/OnlineSessionInterface.h"
 #include "OnlineSessionSettings.h"
+#include "TabletopGameInstance.h"
 #include "Interfaces/OnlineIdentityInterface.h"
 #include "Online/OnlineSessionNames.h"
 
@@ -816,6 +817,23 @@ TArray<FFoundSessionRow> UMenuWidget::GetLastSearchRows() const // ⭐ removed U
         Out.Add(Row);
     }
     return Out;
+}
+
+void UMenuWidget::UI_SetMasterVolume(float Linear01)
+{
+    if (auto* GI = GetGameInstance<UTabletopGameInstance>())
+    {
+        GI->SetMasterVolume(Linear01);
+    }
+}
+
+float UMenuWidget::UI_GetMasterVolume() const
+{
+    if (const auto* GI = GetGameInstance<UTabletopGameInstance>())
+    {
+        return GI->GetMasterVolume();
+    }
+    return 1.f;
 }
 
 void UMenuWidget::JoinSessionByIndex(int32 ResultIndex)
