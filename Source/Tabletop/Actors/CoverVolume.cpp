@@ -1,7 +1,12 @@
 #include "CoverVolume.h"
+
+#include "DeploymentZone.h"
+#include "EngineUtils.h"
 #include "Components/BoxComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Net/UnrealNetwork.h"
+#include "Tabletop/Gamemodes/MatchGameMode.h"
+#include "Tabletop/PlayerStates/TabletopPlayerState.h"
 
 DEFINE_LOG_CATEGORY(LogCoverNet);
 

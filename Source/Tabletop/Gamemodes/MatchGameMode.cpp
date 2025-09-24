@@ -2678,8 +2678,36 @@ void AMatchGameMode::ApplyCoverPresetsFromTableOnce()
 
 	auto FactionForVolume = [&](ACoverVolume* CV)->EFaction
 	{
-		// TODO: replace with real nearest-deployment logic
-		return (GetTypeHash(CV) & 1) ? F1 : F2;
+		if (!CV || !W || !GS) return EFaction::None;
+
+		// nearest enabled zone by actor world location
+		ADeploymentZone* Closest = nullptr;
+		float BestD2 = FLT_MAX;
+		const FVector L = CV->GetActorLocation();
+
+		for (TActorIterator<ADeploymentZone> It(W); It; ++It)
+		{
+			ADeploymentZone* Z = *It;
+			if (!Z || !Z->bEnabled) continue;
+
+			const float D2 = FVector::DistSquared(L, Z->GetActorLocation());
+			if (D2 < BestD2) { BestD2 = D2; Closest = Z; }
+		}
+
+		if (!Closest) return EFaction::None;
+
+		int32 TeamNum = 0;
+		switch (Closest->CurrentOwner)
+		{
+		case EDeployOwner::Team1: TeamNum = 1; break;
+		case EDeployOwner::Team2: TeamNum = 2; break;
+		default:                  TeamNum = 0; break; // Either → choose default or None
+		}
+
+		const ATabletopPlayerState* TPS =
+			TeamNum ? Cast<ATabletopPlayerState>(GS->GetPSForTeam(TeamNum)) : nullptr;
+
+		return TPS ? TPS->SelectedFaction : EFaction::None;
 	};
 
 	GS->CoverAssignments.Reset(Covers.Num());

@@ -1,7 +1,9 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "DeploymentZone.h"
 #include "GameFramework/Actor.h"
+#include "Tabletop/ArmyData.h"
 #include "CoverVolume.generated.h"
 
 class UBoxComponent;
@@ -38,7 +40,7 @@ public:
 
 	UPROPERTY(Transient)
 	bool bInitialized = false;
-
+	
 	UPROPERTY(Transient)
 	float PendingHealth = -1.f;
 	
