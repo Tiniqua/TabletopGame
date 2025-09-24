@@ -20,10 +20,9 @@
 // Data-driven combat system additions
 #include "Components/BoxComponent.h"
 #include "Tabletop/AbiltyEventSubsystem.h"
-#include "Tabletop/ArmyData.h"                  // Faction -> Units DT lookup
+#include "Tabletop/ArmyData.h"
 #include "Tabletop/WeaponKeywords.h"
 #include "Tabletop/CombatEffects.h"
-#include "Tabletop/CoverPresetData.h"
 #include "Tabletop/KeywordProcessor.h"
 #include "Tabletop/UnitActionResourceComponent.h"
 #include "Tabletop/WeaponKeywordHelpers.h"
@@ -155,32 +154,6 @@ static bool IsCoverNearActor(const ACoverVolume* CV, const AActor* A, float MaxC
 
 	// GetClosestPointOnCollision returns distance in cm (or -1 if invalid); treat <= MaxCm as "near"
 	return (d >= 0.f) && (d <= MaxCm + KINDA_SMALL_NUMBER);
-}
-
-static ADeploymentZone* NearestZoneFor(const FVector& P, const TArray<ADeploymentZone*>& Zones)
-{
-    ADeploymentZone* Best = nullptr;
-    float BestD2 = TNumericLimits<float>::Max();
-    for (ADeploymentZone* Z : Zones)
-    {
-        if (!Z || !Z->bEnabled) continue;
-        const float D2 = FVector::DistSquared(P, Z->GetActorLocation());
-        if (D2 < BestD2) { BestD2 = D2; Best = Z; }
-    }
-    return Best;
-}
-
-static void GatherZonesByTeam(UWorld* W, TArray<ADeploymentZone*>& OutTeam1, TArray<ADeploymentZone*>& OutTeam2)
-{
-    OutTeam1.Reset(); OutTeam2.Reset();
-    for (TActorIterator<ADeploymentZone> It(W); It; ++It)
-    {
-        ADeploymentZone* Z = *It;
-        if (!Z || !Z->bEnabled) continue;
-        if (Z->CurrentOwner == EDeployOwner::Team1) OutTeam1.Add(Z);
-        else if (Z->CurrentOwner == EDeployOwner::Team2) OutTeam2.Add(Z);
-        // We ignore “Either” for assignment to keep the mapping unambiguous.
-    }
 }
 
 static FName PickRowForFaction(const UDataTable* DT, EFaction Faction, bool bPreferLow)
@@ -422,6 +395,12 @@ void AMatchGameState::Multicast_ClearPotentialTargets_Implementation()
 
         U->SetHighlightLocal(EUnitHighlight::None);
     }
+
+	SetGlobalTarget(nullptr);
+	Multicast_ApplySelectionVis(SelectedUnitGlobal, nullptr);
+	
+	ForceNetUpdate();
+	
     LastPotentialApplied.Reset();
 
 	OnDeploymentChanged.Broadcast();
@@ -1056,7 +1035,7 @@ bool AMatchGameMode::QueryCoverWithActor(
     OutPrimaryCover = Primary;
     if (OutCoverHits) *OutCoverHits = HitsPerCoverLocal;
 
-    if (bDraw)
+    if (S->bDrawDebugHelpers)
     {
         const FVector Mid=(Attacker->GetActorLocation()+Target->GetActorLocation())*0.5f+FVector(0,0,140.f);
         FString pick = Primary? Primary->GetName() : TEXT("none");
@@ -1094,9 +1073,12 @@ void AMatchGameMode::ApplyDelayedCoverDamage(ACoverVolume* Cover, float Damage, 
 	if (AMatchGameState* S = GS())
 	{
 		// Optional: small orange note so you can see it landed with the impacts
-		S->Multicast_DrawShotDebug(DebugLoc, DebugMsg, FColor::Orange, 4.f);
-		S->OnDeploymentChanged.Broadcast();
-		S->ForceNetUpdate();
+		if(S->bDrawDebugHelpers)
+		{
+			S->Multicast_DrawShotDebug(DebugLoc, DebugMsg, FColor::Orange, 4.f);
+			S->OnDeploymentChanged.Broadcast();
+			S->ForceNetUpdate();
+		}
 	}
 }
 
@@ -1949,28 +1931,6 @@ int32 AMatchGameMode::CountVisibleTargetModels(const AUnitBase* Attacker, const 
     return Visible;
 }
 
-
-static void DrawCoverTrace(UWorld* World,
-                           const FVector& A, const FVector& B,
-                           const FColor& Col, float Thk, float Time)
-{
-    if (!World) return;
-    if (AMatchGameState* S = World->GetGameState<AMatchGameState>())
-    {
-        S->Multicast_DrawLine(A, B, Col, Time, Thk);
-    }
-}
-
-static void DrawCoverNote(UWorld* World, const FVector& At, const FString& Msg,
-                          const FColor& Col, float Time)
-{
-    if (!World) return;
-    if (AMatchGameState* S = World->GetGameState<AMatchGameState>())
-    {
-        S->Multicast_DrawWorldText(At, Msg, Col, Time, 1.0f);
-    }
-}
-
 void AMatchGameMode::Handle_CancelPreview(AMatchPlayerController* PC, AUnitBase* Attacker)
 {
     if (!HasAuthority() || !PC || !Attacker) return;
@@ -2552,7 +2512,10 @@ void AMatchGameMode::ApplyDelayedDamageAndReport(AUnitBase* Attacker, AUnitBase*
     	Emit(ECombatEvent::PostResolveAttack, Attacker, Target);
     }
 
-    S->Multicast_DrawShotDebug(DebugMid, DebugMsg, FColor::Black, 8.f);
+	if(S->bDrawDebugHelpers)
+	{
+		S->Multicast_DrawShotDebug(DebugMid, DebugMsg, FColor::Black, 8.f);
+	}
 
     S->OnDeploymentChanged.Broadcast();
     S->ForceNetUpdate();

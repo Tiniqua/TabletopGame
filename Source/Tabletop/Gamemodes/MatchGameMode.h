@@ -298,8 +298,11 @@ public:
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	virtual void BeginPlay() override;
 	
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="NetDebug")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="NetDebug") // Debug Text in world mostly
 	bool bEnableNetDebugDraw = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="NetDebug") // Debug lines in world mostly
+	bool bDrawDebugHelpers = false;
 
 	UPROPERTY(EditAnywhere, Category="NetDebug")
 	TSubclassOf<ANetDebugTextActor> DebugTextActorClass;

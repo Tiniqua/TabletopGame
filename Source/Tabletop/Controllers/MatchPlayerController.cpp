@@ -184,10 +184,10 @@ void AMatchPlayerController::OnLeftClick()
         const FRotator YawOnly(0.f, GetControlRotation().Yaw, 0.f);
         const FTransform Where(YawOnly, Hit.ImpactPoint);
 
-    	Server_RequestDeploy(PendingDeployUnit, Where, PendingWeaponIndex);
-    	PendingDeployUnit  = NAME_None;
-    	PendingWeaponIndex = INDEX_NONE;
-    	StopDeployCursorFeedback();
+        Server_RequestDeploy(PendingDeployUnit, Where, PendingWeaponIndex);
+        PendingDeployUnit  = NAME_None;
+        PendingWeaponIndex = INDEX_NONE;
+        StopDeployCursorFeedback();
         return;
     }
 
@@ -202,42 +202,61 @@ void AMatchPlayerController::OnLeftClick()
         return;
     }
 
+    // --- SAFETY: if we’re in Shoot, never stay in friendly-only target mode (Field Medic leftovers)
+    if (S->TurnPhase == ETurnPhase::Shoot && bFriendlyTargetMode)
+    {
+        // Drop the friendly gate so enemy clicks will work below.
+        bFriendlyTargetMode = false;
+        // keep bTargetMode as-is so user remains in a targeting flow if they were.
+    }
+
     // ---------- Phase-agnostic (but only when it's your turn): try unit click first ----------
-	if (AUnitBase* Clicked = TraceUnit())
-	{
-		const bool bClickedFriendly = (Clicked->OwningPS == PlayerState);
-		const bool bHaveSelFriendly = (SelectedUnit && SelectedUnit->OwningPS == PlayerState);
+    if (AUnitBase* Clicked = TraceUnit())
+    {
+        const bool bClickedFriendly = (Clicked->OwningPS == PlayerState);
+        const bool bHaveSelFriendly = (SelectedUnit && SelectedUnit->OwningPS == PlayerState);
 
-		// --- Target mode branch (works in Move or Shoot) ---
-		if (bTargetMode && bHaveSelFriendly)
-		{
-			if (bFriendlyTargetMode)
-			{
-				// Friendly targeting (Field Medic, etc.) — accept friendly clicks in ANY phase
-				if (bClickedFriendly)
-				{
-					Server_SelectFriendly(SelectedUnit, Clicked);
-				}
-				// Ignore enemy clicks while in friendly mode
-				return;
-			}
+        // --- Target mode branch (works in Move or Shoot) ---
+        if (bTargetMode && bHaveSelFriendly)
+        {
+            if (bFriendlyTargetMode)
+            {
+                // Friendly targeting (Field Medic, etc.)
+                if (bClickedFriendly)
+                {
+                    Server_SelectFriendly(SelectedUnit, Clicked);
+                    return;
+                }
 
-			// Enemy targeting (Shoot) — only accept enemy clicks during Shoot phase
-			if (S->TurnPhase == ETurnPhase::Shoot && !bClickedFriendly)
-			{
-				Server_SelectTarget(SelectedUnit, Clicked);
-			}
-			// Ignore friendly clicks while aiming at enemies
-			return;
-		}
+                // If we somehow still have friendly-mode active but the player clicks an enemy
+                // while in Shoot, treat it as a mode switch and proceed with enemy selection.
+                if (S->TurnPhase == ETurnPhase::Shoot && !bClickedFriendly)
+                {
+                    bFriendlyTargetMode = false;                 // drop the friendly-only gate
+                    Server_SelectTarget(SelectedUnit, Clicked);  // replace server target with enemy
+                    return;
+                }
 
-		// --- Normal selection when NOT in any target mode ---
-		if (bClickedFriendly)
-		{
-			SelectUnit(Clicked);
-			return;
-		}
-	}
+                // Other phases: still ignore enemy clicks while in friendly mode.
+                return;
+            }
+
+            // Enemy targeting (Shoot) — only accept enemy clicks during Shoot phase
+            if (S->TurnPhase == ETurnPhase::Shoot && !bClickedFriendly)
+            {
+                Server_SelectTarget(SelectedUnit, Clicked);
+            }
+            // Ignore friendly clicks while aiming at enemies
+            return;
+        }
+
+        // --- Normal selection when NOT in any target mode ---
+        if (bClickedFriendly)
+        {
+            SelectUnit(Clicked);
+            return;
+        }
+    }
 
     // ---------- Pending ground-required action? ----------
     if (PendingGroundActionId != NAME_None && SelectedUnit && SelectedUnit->OwningPS == PlayerState)
@@ -264,8 +283,6 @@ void AMatchPlayerController::OnLeftClick()
     // ---------- Shoot phase (not in target mode) ----------
     // Nothing else to do here; selecting friendlies was handled above.
 }
-
-
 
 void AMatchPlayerController::Client_ShowSummary_Implementation()
 {
