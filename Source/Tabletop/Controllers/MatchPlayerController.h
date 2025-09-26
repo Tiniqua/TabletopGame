@@ -112,6 +112,8 @@ public:
 	void TryBindToGameState();
 	void RefreshPhaseUI();
 
+	virtual void Tick(float DeltaSeconds) override;
+
 	UFUNCTION(Client, Reliable)
 	void Client_KickPhaseRefresh();
 

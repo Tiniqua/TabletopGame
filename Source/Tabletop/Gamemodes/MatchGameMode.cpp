@@ -309,13 +309,13 @@ static void DrawLineViaBatcher(UWorld* World, const FVector& A, const FVector& B
 
 void AMatchGameState::Multicast_DrawLine_Implementation(const FVector& Start, const FVector& End, FColor Color, float Time, float Thickness)
 {
-    if (!bEnableNetDebugDraw) return;
+    if (!bDrawDebugHelpers) return;
     DrawLineViaBatcher(GetWorld(), Start, End, Color, Thickness, Time);
 }
 
 void AMatchGameState::Multicast_DrawSphere_Implementation(const FVector& Center, float Radius, int32 Segments, FColor Color, float Time, float Thickness)
 {
-    if (!bEnableNetDebugDraw) return;
+    if (!bDrawDebugHelpers) return;
     UWorld* World = GetWorld();
     if (!World) return;
 

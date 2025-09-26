@@ -380,7 +380,7 @@ bool ADeploymentZone::IsLocationAllowedForTeam(const UWorld* World, int32 TeamNu
             Print(FString::Printf(
                 TEXT("IsLocationAllowedForTeam: ALLOW in zone %s for Team %d"),
                 *ZoneName, TeamNum), FColor::Green);
-            DrawDebugSphere(World, WorldLocation, 50.f, 12, FColor::Green, false, 5.f, 0, 2.f);
+            //DrawDebugSphere(World, WorldLocation, 50.f, 12, FColor::Green, false, 5.f, 0, 2.f);
             return true;
         }
     }
@@ -389,7 +389,7 @@ bool ADeploymentZone::IsLocationAllowedForTeam(const UWorld* World, int32 TeamNu
         TEXT("IsLocationAllowedForTeam: DENY | Team=%d | ZonesVisited=%d | ZonesConsidered=%d"),
         TeamNum, ZonesVisited, ZonesConsidered), FColor::Red);
 
-    DrawDebugSphere(World, WorldLocation, 50.f, 12, FColor::Red, false, 5.f, 0, 2.f);
+    //DrawDebugSphere(World, WorldLocation, 50.f, 12, FColor::Red, false, 5.f, 0, 2.f);
 
     
     return false;

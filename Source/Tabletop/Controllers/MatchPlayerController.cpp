@@ -10,6 +10,7 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerStart.h"
 #include "Kismet/GameplayStatics.h"
+#include "Kismet/KismetMathLibrary.h"
 #include "Tabletop/LibraryHelpers.h"
 #include "Tabletop/MatchSummaryWidget.h"
 #include "Tabletop/TurnContextWidget.h"
@@ -666,28 +667,115 @@ bool AMatchPlayerController::TeleportPawnToFirstPlayerStart()
 
 void AMatchPlayerController::StartDeployCursorFeedback()
 {
-        // Remember the current cursor so we can restore it later
-        DefaultCursorBackup = CurrentMouseCursor;      // (or GetMouseCursor())
-        // Drive at ~30 Hz to avoid per-frame calls
-        GetWorldTimerManager().SetTimer(DeployCursorTimer, this, &AMatchPlayerController::UpdateDeployCursor, 0.033f, true);
+	DefaultCursorBackup = CurrentMouseCursor;
 
-        if (DeployPreviewDecal)
-        {
-                DeployPreviewDecal->DestroyComponent();
-                DeployPreviewDecal = nullptr;
-        }
+	if (DeployPreviewDecal)
+	{
+		// Make sure any previous fade is fully disabled
+		DeployPreviewDecal->SetFadeOut(0.f, 0.f, false);
+		DeployPreviewDecal->SetFadeScreenSize(0.00001f);   // effectively “never fade by size”
+		DeployPreviewDecal->SetHiddenInGame(false);
+		return;
+	}
+
+	if (!DeployPreviewDecalMaterial) return;
+
+	DeployPreviewDecal = UGameplayStatics::SpawnDecalAtLocation(
+		GetWorld(),
+		DeployPreviewDecalMaterial,
+		DeployPreviewDecalSize,
+		FVector::ZeroVector,
+		FRotator::ZeroRotator);
+
+	if (DeployPreviewDecal)
+	{
+		// Kill both fade mechanisms
+		DeployPreviewDecal->SetFadeOut(0.f, 0.f, false);
+		DeployPreviewDecal->SetFadeScreenSize(0.00001f);
+
+		// Make sure it draws on top of other decals if needed
+		DeployPreviewDecal->SetSortOrder(1000);
+
+		// Give the decal some depth so rapid normal changes don’t clip it
+		FVector S = DeployPreviewDecal->DecalSize;
+		S.X = FMath::Max(S.X, 256.f);              // depth along the projection axis
+		DeployPreviewDecal->DecalSize = S;
+
+		DeployPreviewDecal->SetHiddenInGame(true);
+	}
+}
+
+void AMatchPlayerController::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+
+	// Only drive the deploy preview during Deployment AND when a unit is pending
+	AMatchGameState* S = GS();
+	if (!S || S->Phase != EMatchPhase::Deployment)
+	{
+		// If we left deployment mid-preview, clean up
+		if (DeployPreviewDecal)
+		{
+			StopDeployCursorFeedback();
+		}
+		return;
+	}
+
+	if (PendingDeployUnit == NAME_None)
+	{
+		// No active deploy → hide the decal if it exists
+		if (DeployPreviewDecal)
+		{
+			DeployPreviewDecal->SetHiddenInGame(true);
+		}
+		return;
+	}
+
+	// Ensure the decal exists (StartDeployCursorFeedback spawns it)
+	if (!DeployPreviewDecal)
+	{
+		StartDeployCursorFeedback();
+		if (!DeployPreviewDecal) return;
+	}
+
+	FHitResult Hit;
+	const bool bHit = TraceDeployLocation(Hit);
+
+	bool bValid = false;
+	if (bHit)
+	{
+		// Use your existing helper for validity
+		bValid = ULibraryHelpers::IsDeployLocationValid(this, this, Hit.ImpactPoint);
+	}
+
+	// Cursor feedback (optional, keep your existing cursor API)
+	SetCursorType(bValid ? EMouseCursor::Crosshairs : EMouseCursor::SlashedCircle);
+
+	// Update/Hide decal
+	if (bHit)
+	{
+		// Face the surface normal
+		const FRotator FaceSurface = UKismetMathLibrary::MakeRotFromX(-Hit.ImpactNormal);
+		DeployPreviewDecal->SetHiddenInGame(false);
+		DeployPreviewDecal->SetWorldLocation(Hit.ImpactPoint);
+		DeployPreviewDecal->SetWorldRotation(FaceSurface); // set each frame in case the surface changes
+	}
+	else
+	{
+		DeployPreviewDecal->SetHiddenInGame(true);
+	}
 }
 
 void AMatchPlayerController::StopDeployCursorFeedback()
 {
-        GetWorldTimerManager().ClearTimer(DeployCursorTimer);
-        SetCursorType(BackedUpCursor);
+	SetCursorType(BackedUpCursor);
 
-        if (DeployPreviewDecal)
-        {
-                DeployPreviewDecal->DestroyComponent();
-                DeployPreviewDecal = nullptr;
-        }
+	// Destroy & null (you could also keep & hide if you prefer pooling)
+	if (DeployPreviewDecal)
+	{
+		DeployPreviewDecal->DestroyComponent();
+		DeployPreviewDecal = nullptr;
+	}
 }
 
 void AMatchPlayerController::UpdateDeployCursor()
@@ -701,51 +789,56 @@ void AMatchPlayerController::UpdateDeployCursor()
 	FHitResult Hit;
 	const bool bHit = TraceDeployLocation(Hit);
 
-        bool bValid = false;
-        if (bHit)
-        {
-                // Use your helper or direct zone call
-                bValid = ULibraryHelpers::IsDeployLocationValid(this, this, Hit.ImpactPoint);
-                // or:
-                // const int32 Slot = ADeploymentZone::ResolvePlayerSlot(this);
-                // bValid = ADeploymentZone::IsLocationAllowedForPlayer(GetWorld(), Slot, Hit.ImpactPoint);
-        }
+    bool bValid = false;
+    if (bHit)
+    {
+            // Use your helper or direct zone call
+            bValid = ULibraryHelpers::IsDeployLocationValid(this, this, Hit.ImpactPoint);
+            // or:
+            // const int32 Slot = ADeploymentZone::ResolvePlayerSlot(this);
+            // bValid = ADeploymentZone::IsLocationAllowedForPlayer(GetWorld(), Slot, Hit.ImpactPoint);
+    }
 
-        SetCursorType(bValid ? EMouseCursor::Crosshairs : EMouseCursor::SlashedCircle);
+    SetCursorType(bValid ? EMouseCursor::Crosshairs : EMouseCursor::SlashedCircle);
 
-        if (!DeployPreviewDecalMaterial)
-        {
-                return;
-        }
+    if (!DeployPreviewDecalMaterial)
+    {
+    	return;
+    }
 
-        if (bHit)
-        {
-                if (!DeployPreviewDecal)
-                {
-                        DeployPreviewDecal = UGameplayStatics::SpawnDecalAtLocation(
-                                GetWorld(),
-                                DeployPreviewDecalMaterial,
-                                DeployPreviewDecalSize,
-                                Hit.ImpactPoint,
-                                FRotationMatrix::MakeFromZ(Hit.ImpactNormal).Rotator());
+    if (bHit)
+    {
+    	const FRotator FaceSurface = UKismetMathLibrary::MakeRotFromX(-Hit.ImpactNormal);
+    	const float TextureRollDeg = 0.f; // try 90 or -90 if your texture is rotated
+    	FRotator DecalRot = FaceSurface;
+    	DecalRot.Roll += TextureRollDeg;
+    	
+    	if (!DeployPreviewDecal)
+    	{
+    		DeployPreviewDecal = UGameplayStatics::SpawnDecalAtLocation(
+				GetWorld(),
+				DeployPreviewDecalMaterial,
+				DeployPreviewDecalSize,      // X = depth, Y = width, Z = height
+				Hit.ImpactPoint,
+				DecalRot);
 
-                        if (DeployPreviewDecal)
-                        {
-                                DeployPreviewDecal->SetFadeScreenSize(0.f);
-                        }
-                }
-
-                if (DeployPreviewDecal)
-                {
-                        DeployPreviewDecal->SetHiddenInGame(false);
-                        DeployPreviewDecal->SetWorldLocation(Hit.ImpactPoint);
-                        DeployPreviewDecal->SetWorldRotation(FRotationMatrix::MakeFromZ(Hit.ImpactNormal).Rotator());
-                }
-        }
-        else if (DeployPreviewDecal)
-        {
-                DeployPreviewDecal->SetHiddenInGame(true);
-        }
+    		if (DeployPreviewDecal)
+    		{
+    			DeployPreviewDecal->SetFadeScreenSize(0.f);
+    		}
+    	}
+    	if (DeployPreviewDecal)
+    	{
+    		DeployPreviewDecal->SetHiddenInGame(false);
+    		DeployPreviewDecal->SetWorldLocation(Hit.ImpactPoint);
+    		DeployPreviewDecal->SetWorldRotation(DecalRot); // set once
+    	}
+    }
+	
+    else if (DeployPreviewDecal)
+    {
+            DeployPreviewDecal->SetHiddenInGame(true);
+    }
 }
 
 
