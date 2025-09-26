@@ -12,7 +12,9 @@
 
 class AUnitBase;
 class AMatchGameState;
+class UDecalComponent;
 class UDeploymentWidget;
+class UMaterialInterface;
 class UGameplayWidget;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnSelectedChanged, class AUnitBase*, NewSelection);
@@ -178,15 +180,25 @@ private:
 
 	void StartDeployCursorFeedback();
 	void StopDeployCursorFeedback();
-	void UpdateDeployCursor();
-	void SetCursorType(EMouseCursor::Type Type);
+        void UpdateDeployCursor();
+        void SetCursorType(EMouseCursor::Type Type);
 
-	FName PendingDeployUnit = NAME_None;
+        FName PendingDeployUnit = NAME_None;
 
-	void OnLeftClick();       // confirms a deployment if we have a pending unit
-	void OnRightClickCancel();
+        /** Visual preview for deployment placement */
+        UPROPERTY(EditDefaultsOnly, Category="Deploy")
+        TObjectPtr<UMaterialInterface> DeployPreviewDecalMaterial = nullptr;
 
-	bool TraceDeployLocation(FHitResult& OutHit) const;
+        UPROPERTY(EditDefaultsOnly, Category="Deploy")
+        FVector DeployPreviewDecalSize = FVector(100.f, 100.f, 100.f);
+
+        UPROPERTY(Transient)
+        TObjectPtr<UDecalComponent> DeployPreviewDecal = nullptr;
+
+        void OnLeftClick();       // confirms a deployment if we have a pending unit
+        void OnRightClickCancel();
+
+        bool TraceDeployLocation(FHitResult& OutHit) const;
 
 	// Choose which trace channel to use (set in defaults or leave as Visibility if you prefer)
 	UPROPERTY(EditDefaultsOnly, Category="Deploy")

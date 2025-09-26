@@ -4,16 +4,19 @@
 
 #include "EngineUtils.h"
 #include "Blueprint/WidgetBlueprintLibrary.h"
+#include "Components/DecalComponent.h"
 #include "Components/TextBlock.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerStart.h"
+#include "Kismet/GameplayStatics.h"
 #include "Tabletop/LibraryHelpers.h"
 #include "Tabletop/MatchSummaryWidget.h"
 #include "Tabletop/TurnContextWidget.h"
 #include "Tabletop/Actors/UnitAction.h"
 #include "Tabletop/Actors/UnitBase.h"
 #include "Tabletop/Gamemodes/MatchGameMode.h"
+#include "Math/RotationMatrix.h"
 
 
 AMatchGameState* AMatchPlayerController::GS() const
@@ -663,16 +666,28 @@ bool AMatchPlayerController::TeleportPawnToFirstPlayerStart()
 
 void AMatchPlayerController::StartDeployCursorFeedback()
 {
-    // Remember the current cursor so we can restore it later
-    DefaultCursorBackup = CurrentMouseCursor;      // (or GetMouseCursor())
-    // Drive at ~30 Hz to avoid per-frame calls
-    GetWorldTimerManager().SetTimer(DeployCursorTimer, this, &AMatchPlayerController::UpdateDeployCursor, 0.033f, true);
+        // Remember the current cursor so we can restore it later
+        DefaultCursorBackup = CurrentMouseCursor;      // (or GetMouseCursor())
+        // Drive at ~30 Hz to avoid per-frame calls
+        GetWorldTimerManager().SetTimer(DeployCursorTimer, this, &AMatchPlayerController::UpdateDeployCursor, 0.033f, true);
+
+        if (DeployPreviewDecal)
+        {
+                DeployPreviewDecal->DestroyComponent();
+                DeployPreviewDecal = nullptr;
+        }
 }
 
 void AMatchPlayerController::StopDeployCursorFeedback()
 {
-    GetWorldTimerManager().ClearTimer(DeployCursorTimer);
-	SetCursorType(BackedUpCursor);   
+        GetWorldTimerManager().ClearTimer(DeployCursorTimer);
+        SetCursorType(BackedUpCursor);
+
+        if (DeployPreviewDecal)
+        {
+                DeployPreviewDecal->DestroyComponent();
+                DeployPreviewDecal = nullptr;
+        }
 }
 
 void AMatchPlayerController::UpdateDeployCursor()
@@ -686,17 +701,51 @@ void AMatchPlayerController::UpdateDeployCursor()
 	FHitResult Hit;
 	const bool bHit = TraceDeployLocation(Hit);
 
-	bool bValid = false;
-	if (bHit)
-	{
-		// Use your helper or direct zone call
-		bValid = ULibraryHelpers::IsDeployLocationValid(this, this, Hit.ImpactPoint);
-		// or:
-		// const int32 Slot = ADeploymentZone::ResolvePlayerSlot(this);
-		// bValid = ADeploymentZone::IsLocationAllowedForPlayer(GetWorld(), Slot, Hit.ImpactPoint);
-	}
+        bool bValid = false;
+        if (bHit)
+        {
+                // Use your helper or direct zone call
+                bValid = ULibraryHelpers::IsDeployLocationValid(this, this, Hit.ImpactPoint);
+                // or:
+                // const int32 Slot = ADeploymentZone::ResolvePlayerSlot(this);
+                // bValid = ADeploymentZone::IsLocationAllowedForPlayer(GetWorld(), Slot, Hit.ImpactPoint);
+        }
 
-	SetCursorType(bValid ? EMouseCursor::Crosshairs : EMouseCursor::SlashedCircle);
+        SetCursorType(bValid ? EMouseCursor::Crosshairs : EMouseCursor::SlashedCircle);
+
+        if (!DeployPreviewDecalMaterial)
+        {
+                return;
+        }
+
+        if (bHit)
+        {
+                if (!DeployPreviewDecal)
+                {
+                        DeployPreviewDecal = UGameplayStatics::SpawnDecalAtLocation(
+                                GetWorld(),
+                                DeployPreviewDecalMaterial,
+                                DeployPreviewDecalSize,
+                                Hit.ImpactPoint,
+                                FRotationMatrix::MakeFromZ(Hit.ImpactNormal).Rotator());
+
+                        if (DeployPreviewDecal)
+                        {
+                                DeployPreviewDecal->SetFadeScreenSize(0.f);
+                        }
+                }
+
+                if (DeployPreviewDecal)
+                {
+                        DeployPreviewDecal->SetHiddenInGame(false);
+                        DeployPreviewDecal->SetWorldLocation(Hit.ImpactPoint);
+                        DeployPreviewDecal->SetWorldRotation(FRotationMatrix::MakeFromZ(Hit.ImpactNormal).Rotator());
+                }
+        }
+        else if (DeployPreviewDecal)
+        {
+                DeployPreviewDecal->SetHiddenInGame(true);
+        }
 }
 
 
